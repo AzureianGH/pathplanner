@@ -198,111 +198,160 @@ class _WaypointsTreeState extends State<WaypointsTree> {
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6.0),
-          child: Row(
-            children: [
-              Expanded(
-                child: NumberTextField(
-                  initialValue: waypoint.anchor.x,
-                  label: 'X Position (M)',
-                  onSubmitted: (value) {
-                    if (value != null) {
-                      Waypoint wRef = waypoints[waypointIdx];
-                      widget.undoStack.add(_waypointChange(
-                        wRef,
-                        () => wRef.move(value, wRef.anchor.y),
-                        (oldVal) => wRef.move(oldVal.anchor.x, oldVal.anchor.y),
-                      ));
-                    }
-                  },
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: NumberTextField(
-                  initialValue: waypoint.anchor.y,
-                  label: 'Y Position (M)',
-                  onSubmitted: (value) {
-                    if (value != null) {
-                      Waypoint wRef = waypoints[waypointIdx];
-                      widget.undoStack.add(_waypointChange(
-                        wRef,
-                        () => wRef.move(wRef.anchor.x, value),
-                        (oldVal) => wRef.move(oldVal.anchor.x, oldVal.anchor.y),
-                      ));
-                    }
-                  },
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: NumberTextField(
-                  initialValue: waypoint.heading.degrees,
-                  label: 'Heading (Deg)',
-                  arrowKeyIncrement: 1.0,
-                  onSubmitted: (value) {
-                    if (value != null) {
-                      Waypoint wRef = waypoints[waypointIdx];
-                      widget.undoStack.add(_waypointChange(
-                        wRef,
-                        () => wRef.setHeading(Rotation2d.fromDegrees(value)),
-                        (oldVal) => wRef.setHeading(oldVal.heading),
-                      ));
-                    }
-                  },
-                ),
-              ),
-            ],
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              bool useCompactLayout = constraints.maxWidth < 760;
+
+              Widget xField = NumberTextField(
+                initialValue: waypoint.anchor.x,
+                label: 'X Position (M)',
+                onSubmitted: (value) {
+                  if (value != null) {
+                    Waypoint wRef = waypoints[waypointIdx];
+                    widget.undoStack.add(_waypointChange(
+                      wRef,
+                      () => wRef.move(value, wRef.anchor.y),
+                      (oldVal) => wRef.move(oldVal.anchor.x, oldVal.anchor.y),
+                    ));
+                  }
+                },
+              );
+
+              Widget yField = NumberTextField(
+                initialValue: waypoint.anchor.y,
+                label: 'Y Position (M)',
+                onSubmitted: (value) {
+                  if (value != null) {
+                    Waypoint wRef = waypoints[waypointIdx];
+                    widget.undoStack.add(_waypointChange(
+                      wRef,
+                      () => wRef.move(wRef.anchor.x, value),
+                      (oldVal) => wRef.move(oldVal.anchor.x, oldVal.anchor.y),
+                    ));
+                  }
+                },
+              );
+
+              Widget headingField = NumberTextField(
+                initialValue: waypoint.heading.degrees,
+                label: 'Heading (Deg)',
+                arrowKeyIncrement: 1.0,
+                onSubmitted: (value) {
+                  if (value != null) {
+                    Waypoint wRef = waypoints[waypointIdx];
+                    widget.undoStack.add(_waypointChange(
+                      wRef,
+                      () => wRef.setHeading(Rotation2d.fromDegrees(value)),
+                      (oldVal) => wRef.setHeading(oldVal.heading),
+                    ));
+                  }
+                },
+              );
+
+              if (useCompactLayout) {
+                return Column(
+                  children: [
+                    xField,
+                    const SizedBox(height: 8),
+                    yField,
+                    const SizedBox(height: 8),
+                    headingField,
+                  ],
+                );
+              }
+
+              return Row(
+                children: [
+                  Expanded(child: xField),
+                  const SizedBox(width: 8),
+                  Expanded(child: yField),
+                  const SizedBox(width: 8),
+                  Expanded(child: headingField),
+                ],
+              );
+            },
           ),
         ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6.0),
-          child: Row(
-            children: [
-              if (!waypoint.isStartPoint)
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 12.0),
-                    child: NumberTextField(
-                      initialValue: waypoint.prevControlLength!,
-                      label: 'Previous Control Length (M)',
-                      onSubmitted: (value) {
-                        if (value != null) {
-                          Waypoint wRef = waypoints[waypointIdx];
-                          widget.undoStack.add(_waypointChange(
-                            wRef,
-                            () => wRef.setPrevControlLength(value),
-                            (oldVal) => wRef.setPrevControlLength(
-                                oldVal.prevControlLength!),
-                          ));
-                        }
-                      },
-                    ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              bool useCompactLayout = constraints.maxWidth < 760;
+              List<Widget> controlFields = [];
+
+              if (!waypoint.isStartPoint) {
+                controlFields.add(
+                  NumberTextField(
+                    initialValue: waypoint.prevControlLength!,
+                    label: 'Previous Control Length (M)',
+                    onSubmitted: (value) {
+                      if (value != null) {
+                        Waypoint wRef = waypoints[waypointIdx];
+                        widget.undoStack.add(_waypointChange(
+                          wRef,
+                          () => wRef.setPrevControlLength(value),
+                          (oldVal) =>
+                              wRef.setPrevControlLength(oldVal.prevControlLength!),
+                        ));
+                      }
+                    },
                   ),
-                ),
-              if (!waypoint.isStartPoint && !waypoint.isEndPoint)
-                const SizedBox(width: 8),
-              if (!waypoint.isEndPoint)
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 12.0),
-                    child: NumberTextField(
-                      initialValue: waypoint.nextControlLength!,
-                      label: 'Next Control Length (M)',
-                      onSubmitted: (value) {
-                        if (value != null) {
-                          Waypoint wRef = waypoints[waypointIdx];
-                          widget.undoStack.add(_waypointChange(
-                            wRef,
-                            () => wRef.setNextControlLength(value),
-                            (oldVal) => wRef.setNextControlLength(
-                                oldVal.nextControlLength!),
-                          ));
-                        }
-                      },
-                    ),
+                );
+              }
+
+              if (!waypoint.isEndPoint) {
+                controlFields.add(
+                  NumberTextField(
+                    initialValue: waypoint.nextControlLength!,
+                    label: 'Next Control Length (M)',
+                    onSubmitted: (value) {
+                      if (value != null) {
+                        Waypoint wRef = waypoints[waypointIdx];
+                        widget.undoStack.add(_waypointChange(
+                          wRef,
+                          () => wRef.setNextControlLength(value),
+                          (oldVal) =>
+                              wRef.setNextControlLength(oldVal.nextControlLength!),
+                        ));
+                      }
+                    },
                   ),
-                ),
-            ],
+                );
+              }
+
+              if (controlFields.isEmpty) {
+                return const SizedBox.shrink();
+              }
+
+              if (useCompactLayout) {
+                return Padding(
+                  padding: const EdgeInsets.only(top: 12.0),
+                  child: Column(
+                    children: [
+                      for (int i = 0; i < controlFields.length; i++) ...[
+                        controlFields[i],
+                        if (i < controlFields.length - 1)
+                          const SizedBox(height: 8),
+                      ],
+                    ],
+                  ),
+                );
+              }
+
+              return Row(
+                children: [
+                  for (int i = 0; i < controlFields.length; i++) ...[
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 12.0),
+                        child: controlFields[i],
+                      ),
+                    ),
+                    if (i < controlFields.length - 1) const SizedBox(width: 8),
+                  ],
+                ],
+              );
+            },
           ),
         ),
         const SizedBox(height: 8.0),

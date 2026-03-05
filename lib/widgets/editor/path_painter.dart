@@ -4,6 +4,8 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:pathplanner/path/choreo_path.dart';
+import 'package:pathplanner/path/field_constraints_profile.dart';
+import 'package:pathplanner/path/optimization_boundary.dart';
 import 'package:pathplanner/path/point_towards_zone.dart';
 import 'package:pathplanner/path/rotation_target.dart';
 import 'package:pathplanner/robot_features/feature.dart';
@@ -17,11 +19,28 @@ import 'package:pathplanner/widgets/field_image.dart';
 import 'package:pathplanner/util/path_painter_util.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+class TimedPathRange {
+  final String pathName;
+  final num startTime;
+  final num endTime;
+  final bool isChoreoPath;
+
+  const TimedPathRange({
+    required this.pathName,
+    required this.startTime,
+    required this.endTime,
+    this.isChoreoPath = false,
+  });
+}
+
 class PathPainter extends CustomPainter {
   final ColorScheme colorScheme;
   final List<PathPlannerPath> paths;
   final List<ChoreoPath> choreoPaths;
   final FieldImage fieldImage;
+  final List<FieldConstraintObject> fieldObjects;
+  final List<FieldConstraintZone> fieldZones;
+  final Set<String> hiddenFieldZoneNames;
   final bool simple;
   final bool hideOtherPathsOnHover;
   final String? hoveredPath;
@@ -38,6 +57,12 @@ class PathPainter extends CustomPainter {
   final PathPlannerTrajectory? simulatedPath;
   final SharedPreferences prefs;
   final PathPlannerPath? optimizedPath;
+  final int? selectedBoundary;
+  final bool boundaryDrawMode;
+  final List<Translation2d> referencePath;
+  final bool referencePathDrawMode;
+  final List<Translation2d> drawingReferencePathPoints;
+  final List<TimedPathRange> timedPathRanges;
 
   late final RobotConfig robotConfig;
   late final num robotRadius;
@@ -51,6 +76,9 @@ class PathPainter extends CustomPainter {
     required this.paths,
     this.choreoPaths = const [],
     required this.fieldImage,
+    this.fieldObjects = const [],
+    this.fieldZones = const [],
+    this.hiddenFieldZoneNames = const {},
     this.simple = false,
     this.hideOtherPathsOnHover = false,
     this.hoveredPath,
@@ -65,9 +93,15 @@ class PathPainter extends CustomPainter {
     this.hoveredMarker,
     this.selectedMarker,
     this.simulatedPath,
+    this.timedPathRanges = const [],
     Animation<double>? animation,
     required this.prefs,
     this.optimizedPath,
+    this.selectedBoundary,
+    this.boundaryDrawMode = false,
+    this.referencePath = const [],
+    this.referencePathDrawMode = false,
+    this.drawingReferencePathPoints = const [],
   }) : super(repaint: animation) {
     robotConfig = RobotConfig.fromPrefs(prefs);
     robotRadius = sqrt((robotConfig.bumperSize.width *
@@ -98,7 +132,11 @@ class PathPainter extends CustomPainter {
     _paintGrid(
         canvas, size, prefs.getBool(PrefsKeys.showGrid) ?? Defaults.showGrid);
 
+    _paintFieldObjectsAndZones(canvas);
+
     for (int i = 0; i < paths.length; i++) {
+      _paintOptimizationBoundaries(paths[i], canvas);
+
       if (hideOtherPathsOnHover &&
           hoveredPath != null &&
           hoveredPath != paths[i].name) {
@@ -109,12 +147,17 @@ class PathPainter extends CustomPainter {
         _paintRadius(paths[i], canvas, scale);
       }
 
+        final bool isActivePath = _isActivePath(paths[i].name, false);
+
       _paintPathPoints(
           paths[i],
           canvas,
-          (hoveredPath == paths[i].name)
+          isActivePath
+            ? Colors.pinkAccent
+            : (hoveredPath == paths[i].name)
               ? Colors.orange
-              : colorScheme.secondary);
+            : colorScheme.secondary,
+          isActivePath ? 4.0 : 2.0);
 
       if (robotConfig.holonomic) {
         _paintRotations(paths[i], canvas, scale);
@@ -145,12 +188,17 @@ class PathPainter extends CustomPainter {
         continue;
       }
 
+        final bool isActivePath = _isActivePath(choreoPaths[i].name, true);
+
       _paintTrajectory(
           choreoPaths[i].trajectory,
           canvas,
-          (hoveredPath == choreoPaths[i].name)
+          isActivePath
+            ? Colors.pinkAccent
+            : (hoveredPath == choreoPaths[i].name)
               ? Colors.orange
-              : colorScheme.secondary);
+            : colorScheme.secondary,
+          isActivePath ? 4.0 : 2.0);
       _paintChoreoWaypoint(
           choreoPaths[i].trajectory.states.first, canvas, Colors.green, scale);
       _paintChoreoWaypoint(
@@ -161,6 +209,8 @@ class PathPainter extends CustomPainter {
     if (optimizedPath != null) {
       _paintPathPoints(optimizedPath!, canvas, Colors.deepPurpleAccent, 4.0);
     }
+
+    _paintReferencePath(canvas);
 
     for (int i = 1; i < paths.length; i++) {
       // Paint warnings between breaks in paths
@@ -276,12 +326,12 @@ class PathPainter extends CustomPainter {
     }
   }
 
-  void _paintTrajectory(
-      PathPlannerTrajectory traj, Canvas canvas, Color baseColor) {
+  void _paintTrajectory(PathPlannerTrajectory traj, Canvas canvas,
+      Color baseColor, [double strokeWidth = 2.0]) {
     var paint = Paint()
       ..style = PaintingStyle.stroke
       ..color = baseColor
-      ..strokeWidth = 2;
+      ..strokeWidth = strokeWidth;
 
     Path p = Path();
 
@@ -297,6 +347,222 @@ class PathPainter extends CustomPainter {
     }
 
     canvas.drawPath(p, paint);
+  }
+
+  void _paintOptimizationBoundaries(PathPlannerPath path, Canvas canvas) {
+    for (int i = 0; i < path.optimizationBoundaries.length; i++) {
+      final boundary = path.optimizationBoundaries[i];
+      final isSelected = selectedBoundary == i;
+
+      final boundaryPath = Path();
+      final boundaryCorners = boundary.corners();
+      final firstBoundaryCorner = PathPainterUtil.pointToPixelOffset(
+          boundaryCorners[0], scale, fieldImage);
+      boundaryPath.moveTo(firstBoundaryCorner.dx, firstBoundaryCorner.dy);
+      for (int c = 1; c < boundaryCorners.length; c++) {
+        final corner =
+            PathPainterUtil.pointToPixelOffset(boundaryCorners[c], scale, fieldImage);
+        boundaryPath.lineTo(corner.dx, corner.dy);
+      }
+      boundaryPath.close();
+
+      final tolerancePath = Path();
+      final toleranceCorners = boundary.corners(inflate: boundary.tolerance);
+      final firstToleranceCorner = PathPainterUtil.pointToPixelOffset(
+          toleranceCorners[0], scale, fieldImage);
+      tolerancePath.moveTo(firstToleranceCorner.dx, firstToleranceCorner.dy);
+      for (int c = 1; c < toleranceCorners.length; c++) {
+        final corner = PathPainterUtil.pointToPixelOffset(
+            toleranceCorners[c], scale, fieldImage);
+        tolerancePath.lineTo(corner.dx, corner.dy);
+      }
+      tolerancePath.close();
+
+      final boundaryPaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = isSelected ? 3.0 : 2.0
+        ..color = Colors.red;
+
+      final tolerancePaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = isSelected ? 2.5 : 1.5
+        ..color = Colors.pinkAccent;
+
+      canvas.drawPath(tolerancePath, tolerancePaint);
+      canvas.drawPath(boundaryPath, boundaryPaint);
+
+      if (isSelected) {
+        final handlePaint = Paint()
+          ..style = PaintingStyle.fill
+          ..color = Colors.white;
+        final handleStrokePaint = Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.0
+          ..color = Colors.red;
+
+        final handleRadius =
+            PathPainterUtil.uiPointSizeToPixels(10, scale, fieldImage);
+        for (final corner in boundaryCorners) {
+          final cornerPx =
+              PathPainterUtil.pointToPixelOffset(corner, scale, fieldImage);
+          canvas.drawCircle(cornerPx, handleRadius, handlePaint);
+          canvas.drawCircle(cornerPx, handleRadius, handleStrokePaint);
+        }
+
+        final rotateHandlePx = PathPainterUtil.pointToPixelOffset(
+            boundary.rotationHandle(), scale, fieldImage);
+        final rotateLineStart = PathPainterUtil.pointToPixelOffset(
+            boundary.toWorld(Translation2d(0.0, boundary.height / 2.0)),
+            scale,
+            fieldImage);
+
+        final rotateLinePaint = Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.0
+          ..color = Colors.pinkAccent;
+        canvas.drawLine(rotateLineStart, rotateHandlePx, rotateLinePaint);
+        canvas.drawCircle(rotateHandlePx, handleRadius * 0.95, handlePaint);
+        canvas.drawCircle(rotateHandlePx, handleRadius * 0.95, rotateLinePaint);
+      }
+    }
+
+    if (boundaryDrawMode) {
+      final textPainter = TextPainter(
+        textDirection: TextDirection.ltr,
+        text: const TextSpan(
+          text: 'Draw boundary box',
+          style: TextStyle(color: Colors.pinkAccent, fontSize: 16),
+        ),
+      )..layout();
+      textPainter.paint(canvas, const Offset(16, 16));
+    }
+  }
+
+  void _paintFieldObjectsAndZones(Canvas canvas) {
+    for (final object in fieldObjects) {
+      _paintStaticBoundaryOverlay(
+        canvas,
+        object.boundary,
+        Colors.deepOrangeAccent,
+        fillAlpha: 0.12,
+        strokeWidth: 2.0,
+      );
+    }
+
+    for (final zone in fieldZones) {
+      final visible = !hiddenFieldZoneNames.contains(zone.name);
+      if (!visible) {
+        continue;
+      }
+
+      _paintStaticBoundaryOverlay(
+        canvas,
+        zone.boundary,
+        Colors.lightBlueAccent,
+        fillAlpha: 0.10,
+        strokeWidth: 2.0,
+      );
+    }
+  }
+
+  void _paintStaticBoundaryOverlay(
+    Canvas canvas,
+    OptimizationBoundary boundary,
+    Color color, {
+    double fillAlpha = 0.10,
+    double strokeWidth = 2.0,
+  }) {
+    final overlayPath = Path();
+    final corners = boundary.corners();
+    final firstCorner =
+        PathPainterUtil.pointToPixelOffset(corners[0], scale, fieldImage);
+    overlayPath.moveTo(firstCorner.dx, firstCorner.dy);
+    for (int c = 1; c < corners.length; c++) {
+      final corner = PathPainterUtil.pointToPixelOffset(corners[c], scale, fieldImage);
+      overlayPath.lineTo(corner.dx, corner.dy);
+    }
+    overlayPath.close();
+
+    final alpha = ((fillAlpha * 255).round()).clamp(0, 255).toInt();
+    final fillPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..color = color.withAlpha(alpha);
+    final strokePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..color = color;
+
+    canvas.drawPath(overlayPath, fillPaint);
+    canvas.drawPath(overlayPath, strokePaint);
+  }
+
+  void _paintReferencePath(Canvas canvas) {
+    if (referencePath.length >= 2) {
+      _paintReferencePolyline(canvas, referencePath, Colors.cyanAccent, 3.0);
+    }
+
+    if (drawingReferencePathPoints.length >= 2) {
+      _paintReferencePolyline(
+          canvas, drawingReferencePathPoints, Colors.lightBlueAccent, 2.5);
+    }
+
+    if (referencePathDrawMode) {
+      final textPainter = TextPainter(
+        textDirection: TextDirection.ltr,
+        text: const TextSpan(
+          text: 'Draw reference path',
+          style: TextStyle(color: Colors.lightBlueAccent, fontSize: 16),
+        ),
+      )..layout();
+      textPainter.paint(canvas, const Offset(16, 40));
+    }
+  }
+
+  void _paintReferencePolyline(Canvas canvas, List<Translation2d> points,
+      Color color, double strokeWidth) {
+    if (points.length < 2) return;
+
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..color = color
+      ..strokeWidth = strokeWidth;
+
+    final polyline = Path();
+    final start =
+        PathPainterUtil.pointToPixelOffset(points.first, scale, fieldImage);
+    polyline.moveTo(start.dx, start.dy);
+
+    for (int i = 1; i < points.length; i++) {
+      final p = PathPainterUtil.pointToPixelOffset(points[i], scale, fieldImage);
+      polyline.lineTo(p.dx, p.dy);
+    }
+
+    canvas.drawPath(polyline, paint);
+
+    final endpointPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..color = color;
+    canvas.drawCircle(start, 3.0, endpointPaint);
+    final end = PathPainterUtil.pointToPixelOffset(points.last, scale, fieldImage);
+    canvas.drawCircle(end, 3.0, endpointPaint);
+  }
+
+  bool _isActivePath(String pathName, bool isChoreoPath) {
+    if (previewTime == null || timedPathRanges.isEmpty) {
+      return false;
+    }
+
+    final num currentTime = previewTime!.value;
+    for (final range in timedPathRanges) {
+      if (range.pathName == pathName &&
+          range.isChoreoPath == isChoreoPath &&
+          currentTime >= range.startTime &&
+          currentTime <= range.endTime) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   void _paintChoreoWaypoint(

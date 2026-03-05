@@ -34,7 +34,7 @@ void main() async {
           minimumSize: Size(400, 280),
           maximumSize: Size(400, 280),
           center: true,
-          title: 'PathPlanner Error',
+          title: 'PathPlannerX Error',
           titleBarStyle: TitleBarStyle.normal,
         );
 
@@ -76,7 +76,7 @@ void main() async {
       size: const Size(1280, 720),
       minimumSize: const Size(640, 360),
       center: true,
-      title: 'PathPlanner',
+      title: 'PathPlannerX',
       titleBarStyle:
           Platform.isMacOS ? TitleBarStyle.normal : TitleBarStyle.hidden,
     );
@@ -142,17 +142,64 @@ class PathPlanner extends StatefulWidget {
 }
 
 class _PathPlannerState extends State<PathPlanner> {
-  late Color _teamColor =
-      Color(widget.prefs.getInt(PrefsKeys.teamColor) ?? Defaults.teamColor);
+  late Color _teamColor;
+  late bool _roundedCorners;
+
+  @override
+  void initState() {
+    super.initState();
+
+    const oldDefaultBlue = 0xFF3F51B5;
+    final saved = widget.prefs.getInt(PrefsKeys.teamColor);
+    final migrated =
+        (saved == null || saved == oldDefaultBlue) ? Defaults.teamColor : saved;
+
+    _teamColor = Color(migrated);
+    _roundedCorners = widget.prefs.getBool(PrefsKeys.roundedCorners) ??
+      Defaults.roundedCorners;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final BorderRadius borderRadius =
+        _roundedCorners ? BorderRadius.circular(10) : BorderRadius.zero;
+
     return MaterialApp(
-      title: 'PathPlanner',
+      title: 'PathPlannerX',
       theme: ThemeData(
         useMaterial3: true,
         colorSchemeSeed: _teamColor,
         brightness: Brightness.dark,
+        cardTheme: CardThemeData(
+          shape: RoundedRectangleBorder(borderRadius: borderRadius),
+        ),
+        dialogTheme: DialogThemeData(
+          shape: RoundedRectangleBorder(borderRadius: borderRadius),
+        ),
+        popupMenuTheme: PopupMenuThemeData(
+          shape: RoundedRectangleBorder(borderRadius: borderRadius),
+        ),
+        snackBarTheme: SnackBarThemeData(
+          shape: RoundedRectangleBorder(borderRadius: borderRadius),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          border: OutlineInputBorder(
+            borderRadius: borderRadius,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: borderRadius,
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: borderRadius,
+          ),
+        ),
+        dropdownMenuTheme: DropdownMenuThemeData(
+          menuStyle: MenuStyle(
+            shape: WidgetStatePropertyAll(
+              RoundedRectangleBorder(borderRadius: borderRadius),
+            ),
+          ),
+        ),
       ),
       home: HomePage(
         appVersion: widget.appVersion,
@@ -166,6 +213,13 @@ class _PathPlannerState extends State<PathPlanner> {
             _teamColor = color;
             widget.prefs.setInt(PrefsKeys.teamColor,
                 int.parse(_teamColor.toHexString(), radix: 16));
+          });
+        },
+        onAppearanceChanged: () {
+          setState(() {
+            _roundedCorners =
+                widget.prefs.getBool(PrefsKeys.roundedCorners) ??
+                    Defaults.roundedCorners;
           });
         },
       ),

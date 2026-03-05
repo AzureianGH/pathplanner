@@ -34,6 +34,8 @@ class _SplitChoreoPathEditorState extends State<SplitChoreoPathEditor>
     with SingleTickerProviderStateMixin {
   final MultiSplitViewController _controller = MultiSplitViewController();
   late bool _treeOnRight;
+  late String _layoutPreset;
+  bool _treeCollapsed = false;
   bool _paused = false;
 
   late AnimationController _previewController;
@@ -46,19 +48,23 @@ class _SplitChoreoPathEditorState extends State<SplitChoreoPathEditor>
 
     _treeOnRight =
         widget.prefs.getBool(PrefsKeys.treeOnRight) ?? Defaults.treeOnRight;
+    _layoutPreset = widget.prefs.getString(PrefsKeys.editorLayoutPreset) ??
+      Defaults.editorLayoutPreset;
 
     double treeWeight = widget.prefs.getDouble(PrefsKeys.editorTreeWeight) ??
         Defaults.editorTreeWeight;
     _controller.areas = [
       Area(
         weight: _treeOnRight ? (1.0 - treeWeight) : treeWeight,
-        minimalWeight: 0.4,
+        minimalWeight: 0.08,
       ),
       Area(
         weight: _treeOnRight ? treeWeight : (1.0 - treeWeight),
-        minimalWeight: 0.4,
+        minimalWeight: 0.08,
       ),
     ];
+
+    _applyLayoutPreset(_layoutPreset, savePref: false);
 
     _simulatePath();
   }
@@ -111,6 +117,8 @@ class _SplitChoreoPathEditorState extends State<SplitChoreoPathEditor>
             axis: Axis.horizontal,
             controller: _controller,
             onWeightChange: () {
+              if (_treeCollapsed) return;
+
               double? newWeight = _treeOnRight
                   ? _controller.areas[1].weight
                   : _controller.areas[0].weight;
@@ -124,50 +132,53 @@ class _SplitChoreoPathEditorState extends State<SplitChoreoPathEditor>
                   onPauseStateChanged: (value) => _paused = value,
                   totalPathTime: widget.path.trajectory.states.last.timeSeconds,
                 ),
-              Card(
-                margin: const EdgeInsets.all(0),
-                elevation: 4.0,
-                color: colorScheme.surface,
-                surfaceTintColor: colorScheme.surfaceTint,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.only(
-                    topLeft:
-                        _treeOnRight ? const Radius.circular(12) : Radius.zero,
-                    topRight:
-                        _treeOnRight ? Radius.zero : const Radius.circular(12),
-                    bottomLeft:
-                        _treeOnRight ? const Radius.circular(12) : Radius.zero,
-                    bottomRight:
-                        _treeOnRight ? Radius.zero : const Radius.circular(12),
+              if (!_treeCollapsed)
+                Card(
+                  margin: const EdgeInsets.all(0),
+                  elevation: 4.0,
+                  color: colorScheme.surface,
+                  surfaceTintColor: colorScheme.surfaceTint,
+                  child: Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        return _buildResponsiveTreeScale(
+                          constraints.maxWidth,
+                          ChoreoPathTree(
+                            path: widget.path,
+                            pathRuntime: widget.path.trajectory.states.isNotEmpty
+                                ? widget.path.trajectory.states.last.timeSeconds
+                                : null,
+                            undoStack: widget.undoStack,
+                            onSideSwapped: () => setState(() {
+                              _treeOnRight = !_treeOnRight;
+                              widget.prefs
+                                  .setBool(PrefsKeys.treeOnRight, _treeOnRight);
+                              _controller.areas =
+                                  _controller.areas.reversed.toList();
+                            }),
+                            onCollapseRequested: () {
+                              setState(() {
+                                _treeCollapsed = true;
+                              });
+                            },
+                            onRenderPath: () {
+                              showDialog(
+                                  context: context,
+                                  builder: (context) {
+                                    return TrajectoryRenderDialog(
+                                      fieldImage: widget.fieldImage,
+                                      prefs: widget.prefs,
+                                      trajectory: widget.path.trajectory,
+                                    );
+                                  });
+                            },
+                          ),
+                        );
+                      },
+                    ),
                   ),
                 ),
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: ChoreoPathTree(
-                    path: widget.path,
-                    pathRuntime: widget.path.trajectory.states.isNotEmpty
-                        ? widget.path.trajectory.states.last.timeSeconds
-                        : null,
-                    undoStack: widget.undoStack,
-                    onSideSwapped: () => setState(() {
-                      _treeOnRight = !_treeOnRight;
-                      widget.prefs.setBool(PrefsKeys.treeOnRight, _treeOnRight);
-                      _controller.areas = _controller.areas.reversed.toList();
-                    }),
-                    onRenderPath: () {
-                      showDialog(
-                          context: context,
-                          builder: (context) {
-                            return TrajectoryRenderDialog(
-                              fieldImage: widget.fieldImage,
-                              prefs: widget.prefs,
-                              trajectory: widget.path.trajectory,
-                            );
-                          });
-                    },
-                  ),
-                ),
-              ),
               if (!_treeOnRight)
                 PreviewSeekbar(
                   previewController: _previewController,
@@ -179,6 +190,21 @@ class _SplitChoreoPathEditorState extends State<SplitChoreoPathEditor>
             ],
           ),
         ),
+        if (_treeCollapsed)
+          Positioned(
+            top: 12,
+            right: _treeOnRight ? 12 : null,
+            left: _treeOnRight ? null : 12,
+            child: FilledButton.icon(
+              onPressed: () {
+                setState(() {
+                  _treeCollapsed = false;
+                });
+              },
+              icon: const Icon(Icons.keyboard_double_arrow_left),
+              label: const Text('Menu'),
+            ),
+          ),
       ],
     );
   }
@@ -195,6 +221,66 @@ class _SplitChoreoPathEditorState extends State<SplitChoreoPathEditor>
                     .toInt());
         _previewController.repeat();
       }
+    }
+  }
+
+  Widget _buildResponsiveTreeScale(double maxWidth, Widget child) {
+    const referenceWidth = 420.0;
+
+    double scale = 1.0;
+    if (maxWidth < referenceWidth) {
+      scale = (maxWidth / referenceWidth).clamp(0.72, 1.0);
+    }
+
+    if (scale >= 0.999) {
+      return child;
+    }
+
+    return ClipRect(
+      child: Align(
+        alignment: Alignment.topLeft,
+        child: Transform.scale(
+          scale: scale,
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: maxWidth / scale,
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _applyLayoutPreset(String preset, {bool savePref = true}) {
+    double treeWeight;
+    switch (preset) {
+      case 'compact':
+        treeWeight = 0.35;
+        break;
+      case 'focused':
+        treeWeight = 0.65;
+        break;
+      case 'balanced':
+      default:
+        treeWeight = 0.5;
+        break;
+    }
+
+    _layoutPreset = preset;
+    widget.prefs.setDouble(PrefsKeys.editorTreeWeight, treeWeight);
+    _controller.areas = [
+      Area(
+        weight: _treeOnRight ? (1.0 - treeWeight) : treeWeight,
+        minimalWeight: 0.08,
+      ),
+      Area(
+        weight: _treeOnRight ? treeWeight : (1.0 - treeWeight),
+        minimalWeight: 0.08,
+      ),
+    ];
+
+    if (savePref) {
+      widget.prefs.setString(PrefsKeys.editorLayoutPreset, preset);
     }
   }
 }

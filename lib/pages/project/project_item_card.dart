@@ -14,6 +14,8 @@ class ProjectItemCard extends StatefulWidget {
   final VoidCallback onOpened;
   final VoidCallback? onDuplicated;
   final VoidCallback? onDeleted;
+  final VoidCallback? onShowFile;
+  final VoidCallback? onExport;
   final ValueChanged<String>? onRenamed;
   final bool compact;
   final String? warningMessage;
@@ -28,6 +30,8 @@ class ProjectItemCard extends StatefulWidget {
     required this.onOpened,
     this.onDuplicated,
     this.onDeleted,
+    this.onShowFile,
+    this.onExport,
     this.onRenamed,
     this.compact = false,
     this.warningMessage,
@@ -80,11 +84,50 @@ class _ProjectItemCardState extends State<ProjectItemCard> {
                             onSelected: (value) {
                               if (value == 'duplicate') {
                                 widget.onDuplicated?.call();
+                              } else if (value == 'export') {
+                                widget.onExport?.call();
+                              } else if (value == 'show_file') {
+                                widget.onShowFile?.call();
                               } else if (value == 'delete') {
                                 _showDeleteDialog();
                               }
                             },
                             itemBuilder: (_) {
+                              if (widget.onShowFile == null) {
+                                return const [
+                                  PopupMenuItem(
+                                    value: 'duplicate',
+                                    child: Row(
+                                      children: [
+                                        Icon(Icons.copy),
+                                        SizedBox(width: 12),
+                                        Text('Duplicate'),
+                                      ],
+                                    ),
+                                  ),
+                                  PopupMenuItem(
+                                    value: 'export',
+                                    child: Row(
+                                      children: [
+                                        Icon(Icons.ios_share),
+                                        SizedBox(width: 12),
+                                        Text('Export Package'),
+                                      ],
+                                    ),
+                                  ),
+                                  PopupMenuItem(
+                                    value: 'delete',
+                                    child: Row(
+                                      children: [
+                                        Icon(Icons.delete_forever),
+                                        SizedBox(width: 12),
+                                        Text('Delete'),
+                                      ],
+                                    ),
+                                  ),
+                                ];
+                              }
+
                               return const [
                                 PopupMenuItem(
                                   value: 'duplicate',
@@ -93,6 +136,26 @@ class _ProjectItemCardState extends State<ProjectItemCard> {
                                       Icon(Icons.copy),
                                       SizedBox(width: 12),
                                       Text('Duplicate'),
+                                    ],
+                                  ),
+                                ),
+                                PopupMenuItem(
+                                  value: 'export',
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.ios_share),
+                                      SizedBox(width: 12),
+                                      Text('Export Package'),
+                                    ],
+                                  ),
+                                ),
+                                PopupMenuItem(
+                                  value: 'show_file',
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.folder_open),
+                                      SizedBox(width: 12),
+                                      Text('Show File'),
                                     ],
                                   ),
                                 ),

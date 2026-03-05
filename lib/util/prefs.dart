@@ -1,11 +1,15 @@
 class PrefsKeys {
   static const String editorTreeWeight = 'editorTreeWeight';
+  static const String editorLayoutPreset = 'editorLayoutPreset';
   static const String projectLeftWeight = 'projectLeftWeight';
+  static const String projectLayoutMode = 'projectLayoutMode';
   static const String treeOnRight = 'treeOnRight';
   static const String robotWidth = 'robotWidth';
   static const String robotLength = 'robotLength';
   static const String teamColor = 'teamColor';
+  static const String roundedCorners = 'roundedCorners';
   static const String currentProjectDir = 'currentProjectDir';
+  static const String recentProjects = 'recentProjects';
   static const String macOSBookmark = 'macOSBookmark';
   static const String fieldImage = 'fieldImage';
   static const String seen2026ResetPopup = 'seen2026ResetPopup';
@@ -49,15 +53,20 @@ class PrefsKeys {
   static const String bumperOffsetX = 'bumperOffsetX';
   static const String bumperOffsetY = 'bumperOffsetY';
   static const String robotFeatures = 'robotFeatures';
+  static const String hiddenFieldZones = 'hiddenFieldZones';
+  static const String selectedFieldSetup = 'selectedFieldSetup';
 }
 
 class Defaults {
-  static const int teamColor = 0xFF3F51B5;
+  static const int teamColor = 0xFF7E57C2;
+  static const bool roundedCorners = false;
   static const double robotWidth = 0.9;
   static const double robotLength = 0.9;
   static const bool holonomicMode = true;
   static const double projectLeftWeight = 0.5;
+  static const String projectLayoutMode = 'professional';
   static const double editorTreeWeight = 0.5;
+  static const String editorLayoutPreset = 'balanced';
   static const String ntServerAddress = '10.30.15.2';
   static const bool treeOnRight = true;
   static const String pathSortOption = 'recent';
@@ -100,4 +109,6 @@ class Defaults {
   static const double bumperOffsetX = 0.0;
   static const double bumperOffsetY = 0.0;
   static const List<String> robotFeatures = [];
+  static const List<String> hiddenFieldZones = [];
+  static const String selectedFieldSetup = 'default';
 }

@@ -4,13 +4,19 @@ import 'dart:ui';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:path/path.dart';
 import 'package:pathplanner/widgets/custom_appbar.dart';
 import 'package:pathplanner/widgets/field_image.dart';
 
 class WelcomePage extends StatelessWidget {
   final String appVersion;
+  final List<String> recentProjects;
 
-  const WelcomePage({required this.appVersion, super.key});
+  const WelcomePage({
+    required this.appVersion,
+    this.recentProjects = const [],
+    super.key,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -19,7 +25,7 @@ class WelcomePage extends StatelessWidget {
     return Scaffold(
       appBar: CustomAppBar(
         titleWidget: const Text(
-          'PathPlanner',
+          'PathPlannerX',
           style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500),
         ),
         automaticallyImplyLeading: false,
@@ -56,7 +62,7 @@ class WelcomePage extends StatelessWidget {
                           .scaleXY()
                           .shimmer(delay: 2.seconds, duration: 300.ms),
                       Text(
-                        'PathPlanner',
+                        'PathPlannerX',
                         style: TextStyle(
                             fontSize: 48, color: colorScheme.onSurface),
                       )
@@ -100,6 +106,56 @@ class WelcomePage extends StatelessWidget {
                           delay: 1.5.seconds,
                           duration: 500.ms,
                           curve: Curves.easeInOut),
+                      if (recentProjects.isNotEmpty) ...[
+                        const SizedBox(height: 20),
+                        SizedBox(
+                          width: 540,
+                          child: Card(
+                            color: colorScheme.surface.withAlpha(235),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12.0),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'Recent Projects',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  ...recentProjects
+                                      .take(5)
+                                      .map((projectPath) => ListTile(
+                                            dense: true,
+                                            contentPadding:
+                                                const EdgeInsets.symmetric(
+                                                    horizontal: 4),
+                                            title: Text(
+                                              basename(projectPath),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            subtitle: Text(
+                                              projectPath,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            trailing: const Icon(
+                                                Icons.open_in_new_rounded),
+                                            onTap: () => Navigator.pop(
+                                              context,
+                                              projectPath,
+                                            ),
+                                          )),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ).animate().fadeIn(
+                            delay: 1.6.seconds,
+                            duration: 500.ms,
+                            curve: Curves.easeInOut),
+                      ],
                     ],
                   ),
                 ],

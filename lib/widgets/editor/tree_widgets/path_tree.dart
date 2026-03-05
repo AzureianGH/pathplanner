@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:pathplanner/path/optimization_boundary.dart';
 import 'package:pathplanner/path/path_constraints.dart';
 import 'package:pathplanner/path/pathplanner_path.dart';
+import 'package:pathplanner/widgets/editor/tree_widgets/path_finder_tree.dart';
 import 'package:pathplanner/widgets/editor/tree_widgets/constraint_zones_tree.dart';
 import 'package:pathplanner/widgets/editor/tree_widgets/editor_settings_tree.dart';
 import 'package:pathplanner/widgets/editor/tree_widgets/event_markers_tree.dart';
@@ -44,7 +46,12 @@ class PathTree extends StatefulWidget {
   final SharedPreferences prefs;
   final Widget? runtimeDisplay;
   final Size fieldSizeMeters;
+  final List<OptimizationBoundary> alwaysFieldObjects;
   final VoidCallback? onRenderPath;
+  final VoidCallback? onCollapseRequested;
+  final VoidCallback? onStartBoundaryDraw;
+  final VoidCallback? onStartReferencePathDraw;
+  final VoidCallback? onClearReferencePath;
 
   const PathTree({
     super.key,
@@ -77,7 +84,12 @@ class PathTree extends StatefulWidget {
     required this.defaultConstraints,
     required this.prefs,
     required this.fieldSizeMeters,
+    this.alwaysFieldObjects = const [],
     this.onRenderPath,
+    this.onCollapseRequested,
+    this.onStartBoundaryDraw,
+    this.onStartReferencePathDraw,
+    this.onClearReferencePath,
   });
 
   @override
@@ -87,30 +99,64 @@ class PathTree extends StatefulWidget {
 class _PathTreeState extends State<PathTree> {
   @override
   Widget build(BuildContext context) {
+    final tabs = [
+      const Tab(text: 'Path'),
+      const Tab(text: 'Events'),
+      const Tab(text: 'Constraints'),
+      const Tab(text: 'Other'),
+    ];
+
     return Column(
       children: [
         _buildHeader(),
         const SizedBox(height: 4.0),
         Expanded(
-          child: SingleChildScrollView(
+          child: DefaultTabController(
+            length: tabs.length,
             child: Column(
               children: [
-                _buildWaypointsTree(),
-                _buildEventMarkersTree(),
-                if (widget.holonomicMode) ...[
-                  _buildRotationTargetsTree(),
-                  _buildPointZonesTree(),
-                ],
-                const Divider(),
-                _buildIdealStartingStateTree(),
-                _buildGoalEndStateTree(),
-                const Divider(),
-                _buildGlobalConstraintsTree(),
-                _buildConstraintZonesTree(),
-                if (!widget.holonomicMode) _buildReversedCheckbox(),
-                const Divider(),
-                _buildPathOptimizationTree(),
-                const EditorSettingsTree(),
+                TabBar(isScrollable: true, tabs: tabs),
+                const SizedBox(height: 4.0),
+                Expanded(
+                  child: TabBarView(
+                    children: [
+                      SingleChildScrollView(
+                        child: Column(
+                          children: [
+                            _buildWaypointsTree(),
+                            if (widget.holonomicMode) ...[
+                              _buildRotationTargetsTree(),
+                              _buildPointZonesTree(),
+                            ],
+                          ],
+                        ),
+                      ),
+                      SingleChildScrollView(
+                        child: Column(
+                          children: [
+                            _buildEventMarkersTree(),
+                          ],
+                        ),
+                      ),
+                      SingleChildScrollView(
+                        child: Column(
+                          children: [
+                            _buildGlobalConstraintsTree(),
+                            _buildConstraintZonesTree(),
+                            if (!widget.holonomicMode) _buildReversedCheckbox(),
+                          ],
+                        ),
+                      ),
+                      SingleChildScrollView(
+                        child: Column(
+                          children: [
+                            _PathTreeOtherSection(),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -145,6 +191,14 @@ class _PathTreeState extends State<PathTree> {
           Row(
             children: [
               Tooltip(
+                message: 'Collapse Menu',
+                waitDuration: const Duration(milliseconds: 500),
+                child: IconButton(
+                  onPressed: widget.onCollapseRequested,
+                  icon: const Icon(Icons.keyboard_double_arrow_right),
+                ),
+              ),
+              Tooltip(
                 message: 'Export Path to Image',
                 waitDuration: const Duration(milliseconds: 500),
                 child: IconButton(
@@ -170,9 +224,8 @@ class _PathTreeState extends State<PathTree> {
   Widget _buildInfoCard({required String value}) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      decoration: BoxDecoration(
-        color: const Color.fromARGB(36, 0, 0, 0),
-        borderRadius: BorderRadius.circular(4),
+      decoration: const BoxDecoration(
+        color: Color.fromARGB(36, 0, 0, 0),
       ),
       child: Text(
         value,
@@ -187,7 +240,7 @@ class _PathTreeState extends State<PathTree> {
 
   Widget _buildWaypointsTree() {
     return WaypointsTree(
-      key: ValueKey('waypoints${widget.path.waypoints.length}'),
+      key: const ValueKey('waypointsTree'),
       onWaypointDeleted: widget.onWaypointDeleted,
       initialSelectedWaypoint: widget.initiallySelectedWaypoint,
       controller: widget.waypointsTreeController,
@@ -299,9 +352,8 @@ class _PathTreeState extends State<PathTree> {
         },
         child: Container(
           padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: const Color.fromARGB(36, 0, 0, 0),
-            borderRadius: BorderRadius.circular(4),
+          decoration: const BoxDecoration(
+            color: Color.fromARGB(36, 0, 0, 0),
           ),
           child: Icon(
             widget.path.reversed
@@ -363,6 +415,43 @@ class _PathTreeState extends State<PathTree> {
       undoStack: widget.undoStack,
       prefs: widget.prefs,
       fieldSizeMeters: widget.fieldSizeMeters,
+      alwaysFieldObjects: widget.alwaysFieldObjects,
+      onStartBoundaryDraw: widget.onStartBoundaryDraw,
+      onStartReferencePathDraw: widget.onStartReferencePathDraw,
+      onClearReferencePath: widget.onClearReferencePath,
+    );
+  }
+
+  Widget _buildPathFinderTree() {
+    return PathFinderTree(
+      path: widget.path,
+      onPathChanged: widget.onPathChanged,
+      onUpdate: widget.onOptimizationUpdate,
+      undoStack: widget.undoStack,
+      prefs: widget.prefs,
+      fieldSizeMeters: widget.fieldSizeMeters,
+      alwaysFieldObjects: widget.alwaysFieldObjects,
+    );
+  }
+}
+
+class _PathTreeOtherSection extends StatelessWidget {
+  _PathTreeOtherSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.findAncestorStateOfType<_PathTreeState>();
+    if (state == null) return const SizedBox.shrink();
+
+    return Column(
+      children: [
+        state._buildIdealStartingStateTree(),
+        state._buildGoalEndStateTree(),
+        const Divider(),
+        state._buildPathFinderTree(),
+        state._buildPathOptimizationTree(),
+        const EditorSettingsTree(),
+      ],
     );
   }
 }

@@ -70,7 +70,7 @@ class _UpdateCardState extends State<UpdateCard> with TickerProviderStateMixin {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'PathPlanner update available!',
+                    'PathPlannerX update available!',
                     style:
                         TextStyle(fontSize: 18, color: colorScheme.onSurface),
                   ),

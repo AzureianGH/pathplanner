@@ -10,6 +10,7 @@ import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pathplanner/pages/nav_grid_page.dart';
 import 'package:pathplanner/pages/project/project_page.dart';
+import 'package:pathplanner/path/field_constraints_profile.dart';
 import 'package:pathplanner/pages/telemetry_page.dart';
 import 'package:pathplanner/pages/welcome_page.dart';
 import 'package:pathplanner/services/log.dart';
@@ -17,6 +18,7 @@ import 'package:pathplanner/services/pplib_telemetry.dart';
 import 'package:pathplanner/services/update_checker.dart';
 import 'package:pathplanner/util/prefs.dart';
 import 'package:pathplanner/widgets/custom_appbar.dart';
+import 'package:pathplanner/widgets/dialogs/field_editor_dialog.dart';
 import 'package:pathplanner/widgets/field_image.dart';
 import 'package:pathplanner/widgets/dialogs/settings_dialog.dart';
 import 'package:pathplanner/widgets/pplib_update_card.dart';
@@ -33,6 +35,7 @@ class HomePage extends StatefulWidget {
   final ChangeStack undoStack;
   final PPLibTelemetry telemetry;
   final UpdateChecker updateChecker;
+  final VoidCallback onAppearanceChanged;
 
   const HomePage({
     required this.appVersion,
@@ -42,6 +45,7 @@ class HomePage extends StatefulWidget {
     required this.undoStack,
     required this.telemetry,
     required this.updateChecker,
+    required this.onAppearanceChanged,
     super.key,
   });
 
@@ -57,6 +61,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       Platform.isMacOS ? SecureBookmarks() : null;
   final List<FieldImage> _fieldImages = FieldImage.offialFields();
   FieldImage? _fieldImage;
+  FieldConstraintsProfile _fieldProfile = FieldConstraintsProfile.empty();
+  List<String> _fieldSetupNames = [defaultFieldSetupName];
+  String _selectedFieldSetupName = Defaults.selectedFieldSetup;
+  List<String> _hiddenFieldZoneNames = [];
   late AnimationController _animController;
   late Animation<double> _scaleAnimation;
   final GlobalKey _key = GlobalKey();
@@ -112,6 +120,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           PageRouteBuilder(
             pageBuilder: (context, anim1, anim2) => WelcomePage(
               appVersion: widget.appVersion,
+              recentProjects:
+                  widget.prefs.getStringList(PrefsKeys.recentProjects) ?? [],
             ),
             transitionDuration: Duration.zero,
             reverseTransitionDuration: Duration.zero,
@@ -130,6 +140,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       setState(() {
         _hotReload = widget.prefs.getBool(PrefsKeys.hotReloadEnabled) ??
             Defaults.hotReloadEnabled;
+        _hiddenFieldZoneNames = widget.prefs
+            .getStringList(PrefsKeys.hiddenFieldZones) ??
+          Defaults.hiddenFieldZones;
+        _selectedFieldSetupName =
+          widget.prefs.getString(PrefsKeys.selectedFieldSetup) ??
+            Defaults.selectedFieldSetup;
 
         String? selectedFieldName =
             widget.prefs.getString(PrefsKeys.fieldImage);
@@ -140,6 +156,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               break;
             }
           }
+        }
+
+        if (_fieldImage != null && _fieldProfile.fieldName.isEmpty) {
+          _fieldProfile.fieldName = _fieldImage!.name;
         }
       });
 
@@ -222,7 +242,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       key: _key,
       appBar: CustomAppBar(
         titleWidget: Text(
-          _projectDir == null ? 'PathPlanner' : basename(_projectDir!.path),
+          _projectDir == null ? 'PathPlannerX' : basename(_projectDir!.path),
           style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w500),
         ),
       ),
@@ -236,20 +256,26 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Widget _buildDrawer(BuildContext context) {
     ColorScheme colorScheme = Theme.of(context).colorScheme;
-    return Stack(
-      children: [
-        NavigationDrawer(
-          selectedIndex: _selectedPage,
-          onDestinationSelected: _handleDestinationSelected,
-          backgroundColor: colorScheme.surface,
-          surfaceTintColor: colorScheme.surfaceTint,
-          children: [
-            _buildDrawerHeader(colorScheme),
-            ..._buildNavigationDestinations(),
-          ],
-        ),
-        _buildBottomButtons(colorScheme),
-      ],
+    return SizedBox(
+      width: 304,
+      child: Stack(
+        children: [
+          NavigationDrawer(
+            selectedIndex: _selectedPage,
+            onDestinationSelected: _handleDestinationSelected,
+            backgroundColor: colorScheme.surface,
+            surfaceTintColor: colorScheme.surfaceTint,
+            indicatorShape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(4),
+            ),
+            children: [
+              _buildDrawerHeader(colorScheme),
+              ..._buildNavigationDestinations(),
+            ],
+          ),
+          _buildBottomButtons(colorScheme),
+        ],
+      ),
     );
   }
 
@@ -273,9 +299,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 style: TextStyle(color: colorScheme.onSurface),
               ),
               IconButton(
-                icon: const Icon(Icons.open_in_new_rounded, size: 20),
-                tooltip: 'Open Project',
-                onPressed: () => _openProjectDialog(),
+                icon: const Icon(Icons.settings, size: 20),
+                tooltip: 'Settings',
+                onPressed: () {
+                  Navigator.pop(this.context);
+                  _showSettingsDialog();
+                },
               ),
             ],
           ),
@@ -313,27 +342,28 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         padding: const EdgeInsets.only(bottom: 12.0, left: 8.0),
         child: Row(
           children: [
-            _buildButton(
-              onPressed: () => launchUrl(Uri.parse('https://pathplanner.dev')),
-              icon: const Icon(Icons.description),
-              label: 'Docs',
-              backgroundColor: colorScheme.primaryContainer,
-              foregroundColor: colorScheme.onPrimaryContainer,
+            Expanded(
+              child: _buildButton(
+                onPressed: () => launchUrl(Uri.parse('https://pathplanner.dev')),
+                icon: const Icon(Icons.description),
+                label: 'Docs',
+                backgroundColor: colorScheme.surfaceContainer,
+                foregroundColor: colorScheme.onSurface,
+                surfaceTintColor: colorScheme.surfaceTint,
+              ),
             ),
             const SizedBox(width: 6),
-            _buildButton(
-              onPressed: () {
-                Navigator.pop(this.context);
-                _showSettingsDialog();
-              },
-              icon: Icon(
-                Icons.settings,
-                color: colorScheme.onSurface,
+            Expanded(
+              child: _buildButton(
+                onPressed: () {
+                  Navigator.pop(this.context);
+                  _openProjectDialog();
+                },
+                icon: const Icon(Icons.open_in_new_rounded),
+                label: 'Open Project',
+                backgroundColor: colorScheme.primaryContainer,
+                foregroundColor: colorScheme.onPrimaryContainer,
               ),
-              label: 'Settings',
-              backgroundColor: colorScheme.surfaceContainer,
-              foregroundColor: colorScheme.onSurface,
-              surfaceTintColor: colorScheme.surfaceTint,
             ),
           ],
         ),
@@ -352,14 +382,19 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return ElevatedButton.icon(
       onPressed: onPressed,
       icon: icon,
-      label: Text(label, style: const TextStyle(fontSize: 12)),
+      label: Text(
+        label,
+        style: const TextStyle(fontSize: 12),
+        overflow: TextOverflow.ellipsis,
+        softWrap: false,
+      ),
       style: ElevatedButton.styleFrom(
-        fixedSize: const Size(141, 50),
+        minimumSize: const Size(0, 50),
         backgroundColor: backgroundColor,
         foregroundColor: foregroundColor,
         surfaceTintColor: surfaceTintColor,
         elevation: 4.0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
       ),
     );
   }
@@ -396,6 +431,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             onTeamColorChanged: widget.onTeamColorChanged,
             fieldImages: _fieldImages,
             selectedField: _fieldImage ?? FieldImage.defaultField,
+            fieldProfile: _fieldProfile,
+            fieldSetupNames: _fieldSetupNames,
+            selectedFieldSetupName: _selectedFieldSetupName,
+            hiddenFieldZoneNames: _hiddenFieldZoneNames,
             onFieldSelected: (FieldImage image) {
               setState(() {
                 _fieldImage = image;
@@ -403,8 +442,31 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   _fieldImages.add(image);
                 }
                 widget.prefs.setString(PrefsKeys.fieldImage, image.name);
+                if (_fieldProfile.fieldName.isEmpty) {
+                  _fieldProfile.fieldName = image.name;
+                }
               });
             },
+            onFieldProfileChanged: (profile) {
+              setState(() {
+                _fieldProfile = profile;
+              });
+              _saveFieldProfile();
+            },
+            onSelectedFieldSetupChanged: (setupName) {
+              _selectFieldSetup(setupName);
+            },
+            onManageFieldSetups: _showFieldSetupManager,
+            onHiddenFieldZonesChanged: (hiddenZones) {
+              setState(() {
+                _hiddenFieldZoneNames = hiddenZones;
+              });
+              widget.prefs
+                  .setStringList(PrefsKeys.hiddenFieldZones, hiddenZones);
+              _saveProjectSettingsToFile(_projectDir!);
+            },
+            onImportFieldProfile: _importFieldProfile,
+            onExportFieldProfile: _exportFieldProfile,
             onSettingsChanged: _onProjectSettingsChanged,
           ),
         );
@@ -428,6 +490,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   key: ValueKey(_projectDir!.path.hashCode),
                   prefs: widget.prefs,
                   fieldImage: _fieldImage ?? FieldImage.defaultField,
+                  fieldProfile: _fieldProfile,
+                  fieldSetupNames: _fieldSetupNames,
+                  selectedFieldSetupName: _selectedFieldSetupName,
+                  hiddenFieldZoneNames: _hiddenFieldZoneNames,
                   pathplannerDirectory: _pathplannerDir,
                   choreoDirectory: _choreoDir,
                   fs: fs,
@@ -436,6 +502,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   hotReload: _hotReload,
                   onFoldersChanged: () =>
                       _saveProjectSettingsToFile(_projectDir!),
+                  onFieldSetupSelected: (name) {
+                    _selectFieldSetup(name);
+                  },
+                  onManageFieldSetups: _showFieldSetupManager,
                   simulatePath: true,
                   watchChorDir: true,
                 ),
@@ -500,6 +570,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       _hotReload = widget.prefs.getBool(PrefsKeys.hotReloadEnabled) ??
           Defaults.hotReloadEnabled;
     });
+
+    widget.onAppearanceChanged();
   }
 
   Future<void> _loadProjectSettingsFromFile(Directory projectDir) async {
@@ -575,6 +647,18 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 ?.map((e) => e as String)
                 .toList() ??
             Defaults.robotFeatures);
+    widget.prefs.setStringList(
+      PrefsKeys.hiddenFieldZones,
+      (json[PrefsKeys.hiddenFieldZones] as List<dynamic>?)
+          ?.map((e) => e as String)
+          .toList() ??
+        Defaults.hiddenFieldZones,
+    );
+    widget.prefs.setString(
+      PrefsKeys.selectedFieldSetup,
+      (json[PrefsKeys.selectedFieldSetup] as String?) ??
+          Defaults.selectedFieldSetup,
+    );
   }
 
   void _setPrefDoubleFromJSON(
@@ -667,6 +751,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       PrefsKeys.robotFeatures:
           widget.prefs.getStringList(PrefsKeys.robotFeatures) ??
               Defaults.robotFeatures,
+        PrefsKeys.hiddenFieldZones:
+          widget.prefs.getStringList(PrefsKeys.hiddenFieldZones) ??
+            Defaults.hiddenFieldZones,
+      PrefsKeys.selectedFieldSetup:
+          widget.prefs.getString(PrefsKeys.selectedFieldSetup) ??
+              Defaults.selectedFieldSetup,
     };
 
     settingsFile.writeAsString(encoder.convert(settings)).then((_) {
@@ -693,6 +783,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Future<void> _initFromProjectDir(String projectDir) async {
     widget.prefs.setString(PrefsKeys.currentProjectDir, projectDir);
+    _updateRecentProjects(projectDir);
 
     if (Platform.isMacOS) {
       // Bookmark project on macos so it can be accessed again later
@@ -739,6 +830,388 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     });
 
     await _loadProjectSettingsFromFile(_projectDir!);
+    _hiddenFieldZoneNames =
+      widget.prefs.getStringList(PrefsKeys.hiddenFieldZones) ??
+        Defaults.hiddenFieldZones;
+
+    await _refreshFieldSetups(
+      preferred: widget.prefs.getString(PrefsKeys.selectedFieldSetup),
+    );
+  }
+
+  Future<void> _saveFieldProfile() async {
+    if (_projectDir == null) return;
+    await _fieldProfile.saveSetupToProjectDir(
+      _pathplannerDir.path,
+      fs,
+      setupName: _selectedFieldSetupName,
+    );
+  }
+
+  Future<void> _importFieldProfile() async {
+    const typeGroup =
+        XTypeGroup(label: 'PathPlannerX Field', extensions: ['ppx']);
+    final selectedFile = await openFile(
+      acceptedTypeGroups: [typeGroup],
+      initialDirectory: _projectDir?.path,
+    );
+
+    if (selectedFile == null) {
+      return;
+    }
+
+    final importedName = await FieldConstraintsProfile.importSetupToProjectDir(
+      _pathplannerDir.path,
+      fs,
+      importPath: selectedFile.path,
+    );
+
+    if (importedName == null) {
+      return;
+    }
+
+    await _selectFieldSetup(importedName);
+  }
+
+  Future<void> _exportFieldProfile() async {
+    final defaultName = _selectedFieldSetupName.trim().isEmpty
+        ? defaultFieldSetupName
+        : _selectedFieldSetupName.trim().replaceAll(' ', '_');
+
+    const typeGroup =
+        XTypeGroup(label: 'PathPlannerX Field', extensions: ['ppx']);
+    final destination = await getSaveLocation(
+      acceptedTypeGroups: [typeGroup],
+      suggestedName: '$defaultName.ppx',
+      initialDirectory: _projectDir?.path,
+    );
+
+    if (destination == null) {
+      return;
+    }
+
+    await FieldConstraintsProfile.exportSetupFromProjectDir(
+      _pathplannerDir.path,
+      fs,
+      setupName: _selectedFieldSetupName,
+      exportPath: destination.path,
+    );
+  }
+
+  Future<void> _refreshFieldSetups({String? preferred}) async {
+    if (_projectDir == null) return;
+
+    final setupNames = await FieldConstraintsProfile.listSetupNames(
+      _pathplannerDir.path,
+      fs,
+    );
+
+    if (setupNames.isEmpty) {
+      final fallbackProfile = FieldConstraintsProfile.empty(
+        fieldName: _fieldImage?.name ?? FieldImage.defaultField.name,
+      );
+      await fallbackProfile.saveSetupToProjectDir(
+        _pathplannerDir.path,
+        fs,
+        setupName: defaultFieldSetupName,
+      );
+      setupNames.add(defaultFieldSetupName);
+    }
+
+    final target = FieldConstraintsProfile.sanitizeSetupName(
+      preferred ?? _selectedFieldSetupName,
+    );
+    final selected = setupNames.contains(target) ? target : setupNames.first;
+
+    _fieldSetupNames = setupNames;
+    await _selectFieldSetup(selected, suppressSaveSettings: true);
+  }
+
+  Future<void> _selectFieldSetup(
+    String setupName, {
+    bool suppressSaveSettings = false,
+  }) async {
+    final selected = FieldConstraintsProfile.sanitizeSetupName(setupName);
+    if (_projectDir == null) return;
+
+    final profile = await FieldConstraintsProfile.loadSetupFromProjectDir(
+      _pathplannerDir.path,
+      fs,
+      setupName: selected,
+      fallbackFieldName: _fieldImage?.name ?? FieldImage.defaultField.name,
+    );
+
+    final defaultHiddenZones = [
+      for (final zone in profile.zones)
+        if (!zone.visibleByDefault) zone.name,
+    ];
+
+    setState(() {
+      _selectedFieldSetupName = selected;
+      _fieldProfile = profile;
+      _hiddenFieldZoneNames = defaultHiddenZones;
+    });
+
+    widget.prefs.setString(PrefsKeys.selectedFieldSetup, selected);
+    widget.prefs.setStringList(PrefsKeys.hiddenFieldZones, _hiddenFieldZoneNames);
+    if (!suppressSaveSettings && _projectDir != null) {
+      _saveProjectSettingsToFile(_projectDir!);
+    }
+  }
+
+  Future<void> _createFieldSetup(String setupName) async {
+    if (_projectDir == null) return;
+    final name = FieldConstraintsProfile.sanitizeSetupName(setupName);
+    if (name.isEmpty || _fieldSetupNames.contains(name)) {
+      return;
+    }
+
+    final profile = FieldConstraintsProfile.empty(
+      fieldName: _fieldImage?.name ?? FieldImage.defaultField.name,
+    );
+    await profile.saveSetupToProjectDir(
+      _pathplannerDir.path,
+      fs,
+      setupName: name,
+    );
+
+    await _refreshFieldSetups(preferred: name);
+  }
+
+  Future<void> _renameFieldSetup(String oldName, String newName) async {
+    if (_projectDir == null) return;
+    final renamed = await FieldConstraintsProfile.renameSetupInProjectDir(
+      _pathplannerDir.path,
+      fs,
+      oldSetupName: oldName,
+      newSetupName: newName,
+    );
+    if (renamed == null) return;
+
+    await _refreshFieldSetups(preferred: renamed);
+  }
+
+  Future<void> _deleteFieldSetup(String setupName) async {
+    if (_projectDir == null) return;
+    final sanitized = FieldConstraintsProfile.sanitizeSetupName(setupName);
+    if (_fieldSetupNames.length <= 1) {
+      return;
+    }
+
+    await FieldConstraintsProfile.deleteSetupFromProjectDir(
+      _pathplannerDir.path,
+      fs,
+      setupName: sanitized,
+    );
+
+    final fallback = _fieldSetupNames.firstWhere(
+      (name) => name != sanitized,
+      orElse: () => defaultFieldSetupName,
+    );
+    await _refreshFieldSetups(preferred: fallback);
+  }
+
+  Future<void> _showFieldSetupManager() async {
+    if (_projectDir == null) return;
+
+    await showDialog(
+      context: this.context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Field Setup Manager'),
+              content: SizedBox(
+                width: 720,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Active Setup'),
+                    const SizedBox(height: 6),
+                    DropdownButtonFormField<String>(
+                      value: _fieldSetupNames.contains(_selectedFieldSetupName)
+                          ? _selectedFieldSetupName
+                          : (_fieldSetupNames.isNotEmpty
+                              ? _fieldSetupNames.first
+                              : null),
+                      items: [
+                        for (final name in _fieldSetupNames)
+                          DropdownMenuItem<String>(
+                            value: name,
+                            child: Text(name),
+                          ),
+                      ],
+                      onChanged: (value) async {
+                        if (value == null) return;
+                        await _selectFieldSetup(value);
+                        setDialogState(() {});
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        FilledButton.icon(
+                          onPressed: () async {
+                            final name = await _promptForSetupName(
+                              context,
+                              title: 'New Setup',
+                              initialValue: 'setup_${_fieldSetupNames.length + 1}',
+                            );
+                            if (name == null || name.trim().isEmpty) return;
+                            await _createFieldSetup(name);
+                            setDialogState(() {});
+                          },
+                          icon: const Icon(Icons.add),
+                          label: const Text('New'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _fieldSetupNames.isEmpty
+                              ? null
+                              : () async {
+                                  final name = await _promptForSetupName(
+                                    context,
+                                    title: 'Rename Setup',
+                                    initialValue: _selectedFieldSetupName,
+                                  );
+                                  if (name == null || name.trim().isEmpty) {
+                                    return;
+                                  }
+                                  await _renameFieldSetup(
+                                    _selectedFieldSetupName,
+                                    name,
+                                  );
+                                  setDialogState(() {});
+                                },
+                          icon: const Icon(Icons.drive_file_rename_outline),
+                          label: const Text('Rename'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _fieldSetupNames.length <= 1
+                              ? null
+                              : () async {
+                                  await _deleteFieldSetup(_selectedFieldSetupName);
+                                  setDialogState(() {});
+                                },
+                          icon: const Icon(Icons.delete_forever),
+                          label: const Text('Delete'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () async {
+                            await _importFieldProfile();
+                            await _refreshFieldSetups(
+                                preferred: _selectedFieldSetupName);
+                            setDialogState(() {});
+                          },
+                          icon: const Icon(Icons.file_open),
+                          label: const Text('Import'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _fieldSetupNames.isEmpty
+                              ? null
+                              : () async {
+                                  await _exportFieldProfile();
+                                  setDialogState(() {});
+                                },
+                          icon: const Icon(Icons.ios_share),
+                          label: const Text('Export'),
+                        ),
+                        FilledButton.icon(
+                          onPressed: _fieldSetupNames.isEmpty
+                              ? null
+                              : () async {
+                                  await showDialog(
+                                    context: context,
+                                    builder: (context) {
+                                      return FieldEditorDialog(
+                                        profile: _fieldProfile,
+                                        fieldImage:
+                                            _fieldImage ?? FieldImage.defaultField,
+                                        fieldSizeMeters: (_fieldImage ??
+                                                FieldImage.defaultField)
+                                            .getFieldSizeMeters(),
+                                        onSaved: (updatedProfile) async {
+                                          setState(() {
+                                            _fieldProfile = updatedProfile;
+                                          });
+                                          await _saveFieldProfile();
+                                          setDialogState(() {});
+                                        },
+                                      );
+                                    },
+                                  );
+                                },
+                          icon: const Icon(Icons.edit_road),
+                          label: const Text('Edit Setup'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Close'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<String?> _promptForSetupName(
+    BuildContext context, {
+    required String title,
+    String initialValue = '',
+  }) async {
+    final controller = TextEditingController(text: initialValue);
+
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text(title),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Setup Name',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop(controller.text.trim());
+              },
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _updateRecentProjects(String projectDir) {
+    final recent =
+        List<String>.from(widget.prefs.getStringList(PrefsKeys.recentProjects) ?? []);
+
+    recent.remove(projectDir);
+    recent.insert(0, projectDir);
+
+    if (recent.length > 10) {
+      recent.removeRange(10, recent.length);
+    }
+
+    widget.prefs.setStringList(PrefsKeys.recentProjects, recent);
   }
 
   Future<void> _loadFieldImages() async {

@@ -1,5 +1,12 @@
 import 'package:flutter/material.dart';
 
+class _CommandTypeOption {
+  final String value;
+  final String label;
+
+  const _CommandTypeOption({required this.value, required this.label});
+}
+
 class AddCommandButton extends StatelessWidget {
   final ValueChanged<String> onTypeChosen;
   final bool allowPathCommand;
@@ -16,53 +23,118 @@ class AddCommandButton extends StatelessWidget {
   Widget build(BuildContext context) {
     ColorScheme colorScheme = Theme.of(context).colorScheme;
 
-    return PopupMenuButton(
+    return IconButton(
       tooltip: 'Add Command',
-      elevation: 12.0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-      ),
+      onPressed: () => _showAddCommandDialog(context),
       icon: Icon(Icons.add, color: colorScheme.primary),
-      itemBuilder: (context) => _getMenuEntries(),
-      position: PopupMenuPosition.under,
-      onSelected: (value) {
-        onTypeChosen.call(value);
-      },
     );
   }
 
-  List<PopupMenuEntry<String>> _getMenuEntries() {
+  Future<void> _showAddCommandDialog(BuildContext context) async {
+    final allOptions = _getOptions();
+    String query = '';
+
+    final selectedValue = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        final ColorScheme colorScheme = Theme.of(dialogContext).colorScheme;
+
+        return StatefulBuilder(
+          builder: (context, setState) {
+            final filteredOptions = allOptions
+                .where((option) => option.label
+                    .toLowerCase()
+                    .contains(query.trim().toLowerCase()))
+                .toList();
+
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(4),
+              ),
+              backgroundColor: colorScheme.surface,
+              surfaceTintColor: colorScheme.surfaceTint,
+              title: const Text('Add Command'),
+              content: SizedBox(
+                width: 420,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      autofocus: true,
+                      onChanged: (value) {
+                        setState(() {
+                          query = value;
+                        });
+                      },
+                      decoration: InputDecoration(
+                        hintText: 'Search commands...',
+                        prefixIcon: const Icon(Icons.search_rounded),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 320),
+                      child: filteredOptions.isEmpty
+                          ? const Center(
+                              child: Padding(
+                                padding: EdgeInsets.all(16.0),
+                                child: Text('No matching commands'),
+                              ),
+                            )
+                          : ListView.builder(
+                              shrinkWrap: true,
+                              itemCount: filteredOptions.length,
+                              itemBuilder: (context, index) {
+                                final option = filteredOptions[index];
+
+                                return ListTile(
+                                  dense: true,
+                                  title: Text(option.label),
+                                  onTap: () {
+                                    Navigator.of(dialogContext)
+                                        .pop(option.value);
+                                  },
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Cancel'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (selectedValue != null) {
+      onTypeChosen.call(selectedValue);
+    }
+  }
+
+  List<_CommandTypeOption> _getOptions() {
     return [
       if (allowPathCommand)
-        const PopupMenuItem(
-          value: 'path',
-          child: Text('Follow Path'),
-        ),
-      const PopupMenuItem(
-        value: 'named',
-        child: Text('Named Command'),
-      ),
+        const _CommandTypeOption(value: 'path', label: 'Follow Path'),
+      const _CommandTypeOption(value: 'named', label: 'Named Command'),
       if (allowWaitCommand)
-        const PopupMenuItem(
-          value: 'wait',
-          child: Text('Wait Command'),
-        ),
-      const PopupMenuItem(
-        value: 'sequential',
-        child: Text('Sequential Command Group'),
-      ),
-      const PopupMenuItem(
-        value: 'parallel',
-        child: Text('Parallel Command Group'),
-      ),
-      const PopupMenuItem(
-        value: 'deadline',
-        child: Text('Parallel Deadline Group'),
-      ),
-      const PopupMenuItem(
-        value: 'race',
-        child: Text('Parallel Race Group'),
-      ),
+        const _CommandTypeOption(value: 'wait', label: 'Wait Command'),
+      const _CommandTypeOption(
+          value: 'sequential', label: 'Sequential Command Group'),
+      const _CommandTypeOption(
+          value: 'parallel', label: 'Parallel Command Group'),
+      const _CommandTypeOption(
+          value: 'deadline', label: 'Parallel Deadline Group'),
+      const _CommandTypeOption(value: 'race', label: 'Parallel Race Group'),
     ];
   }
 }

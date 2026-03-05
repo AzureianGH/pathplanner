@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-class RenamableTitle extends StatelessWidget {
+class RenamableTitle extends StatefulWidget {
   final String title;
   final ValueChanged<String>? onRename;
   final TextStyle? textStyle;
@@ -16,24 +16,73 @@ class RenamableTitle extends StatelessWidget {
   });
 
   @override
+  State<RenamableTitle> createState() => _RenamableTitleState();
+}
+
+class _RenamableTitleState extends State<RenamableTitle> {
+  late final TextEditingController _controller;
+  late final FocusNode _focusNode;
+  String? _lastCommitted;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.title);
+    _controller.selection = TextSelection.fromPosition(
+      TextPosition(offset: widget.title.length),
+    );
+    _focusNode = FocusNode();
+  }
+
+  @override
+  void didUpdateWidget(covariant RenamableTitle oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (widget.title != oldWidget.title && !_focusNode.hasFocus) {
+      _controller.value = TextEditingValue(
+        text: widget.title,
+        selection: TextSelection.collapsed(offset: widget.title.length),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _commitRename() {
+    final text = _controller.text.trim();
+    if (text.isEmpty || text == widget.title || text == _lastCommitted) {
+      return;
+    }
+
+    _lastCommitted = text;
+    widget.onRename?.call(text);
+  }
+
+  @override
   Widget build(BuildContext context) {
     ColorScheme colorScheme = Theme.of(context).colorScheme;
 
     return IntrinsicWidth(
       child: TextField(
-        onSubmitted: (String text) {
-          if (text.isNotEmpty) {
-            FocusScopeNode currentScope = FocusScope.of(context);
-            if (!currentScope.hasPrimaryFocus && currentScope.hasFocus) {
-              FocusManager.instance.primaryFocus!.unfocus();
-            }
-            onRename?.call(text);
-          }
+        focusNode: _focusNode,
+        onSubmitted: (_) {
+          _commitRename();
         },
-        style: textStyle ?? TextStyle(color: colorScheme.onSurface),
-        controller: TextEditingController(text: title)
-          ..selection =
-              TextSelection.fromPosition(TextPosition(offset: title.length)),
+        onEditingComplete: () {
+          _commitRename();
+          FocusManager.instance.primaryFocus?.unfocus();
+        },
+        onTapOutside: (_) {
+          _commitRename();
+          FocusManager.instance.primaryFocus?.unfocus();
+        },
+        style: widget.textStyle ?? TextStyle(color: colorScheme.onSurface),
+        controller: _controller,
         decoration: InputDecoration(
           border: InputBorder.none,
           focusedBorder: OutlineInputBorder(
@@ -47,7 +96,7 @@ class RenamableTitle extends StatelessWidget {
               color: Colors.transparent,
             ),
           ),
-          contentPadding: contentPadding ??
+          contentPadding: widget.contentPadding ??
               const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
         ),
         inputFormatters: [

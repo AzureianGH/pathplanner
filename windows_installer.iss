@@ -1,10 +1,10 @@
-#define MyAppName "PathPlanner"
-#define MyAppFolderName "PathPlanner"
+#define MyAppName "PathPlanner X"
+#define MyAppFolderName "PathPlanner X"
 #define MyAppPublisher "mjansen4857"
 #define MyAppURL "https://github.com/mjansen4857/pathplanner/"
-#define MyAppExeName "pathplanner.exe"
-#define AppVersionName GetStringFileInfo('build\windows\x64\runner\Release\pathplanner.exe', 'ProductVersion')
-#define ApplicationVersion GetVersionNumbersString('build\windows\x64\runner\Release\pathplanner.exe')
+#define MyAppExeName "PathPlannerX.exe"
+#define AppVersionName GetStringFileInfo('build\windows\x64\runner\Release\PathPlannerX.exe', 'ProductVersion')
+#define ApplicationVersion GetVersionNumbersString('build\windows\x64\runner\Release\PathPlannerX.exe')
 
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application. Do not use the same AppId value in installers for other applications.
@@ -32,7 +32,7 @@ LicenseFile=LICENSE
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=build\windows\x64\installer
-OutputBaseFilename=pathplanner-setup
+OutputBaseFilename=pathplannerx-setup
 SetupIconFile=windows\icon.ico
 Compression=lzma
 SolidCompression=yes

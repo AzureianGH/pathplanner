@@ -9,6 +9,7 @@ class ChoreoPathTree extends StatefulWidget {
   final ChangeStack undoStack;
   final num? pathRuntime;
   final VoidCallback? onRenderPath;
+  final VoidCallback? onCollapseRequested;
 
   const ChoreoPathTree({
     super.key,
@@ -17,6 +18,7 @@ class ChoreoPathTree extends StatefulWidget {
     required this.undoStack,
     this.pathRuntime,
     this.onRenderPath,
+    this.onCollapseRequested,
   });
 
   @override
@@ -26,6 +28,11 @@ class ChoreoPathTree extends StatefulWidget {
 class _ChoreoPathTreeState extends State<ChoreoPathTree> {
   @override
   Widget build(BuildContext context) {
+    final tabs = [
+      const Tab(text: 'Path'),
+      const Tab(text: 'Settings'),
+    ];
+
     return Column(
       children: [
         Padding(
@@ -42,6 +49,14 @@ class _ChoreoPathTreeState extends State<ChoreoPathTree> {
               ),
               Row(
                 children: [
+                  Tooltip(
+                    message: 'Collapse Menu',
+                    waitDuration: const Duration(milliseconds: 500),
+                    child: IconButton(
+                      onPressed: widget.onCollapseRequested,
+                      icon: const Icon(Icons.keyboard_double_arrow_right),
+                    ),
+                  ),
                   Tooltip(
                     message: 'Export Path to Image',
                     waitDuration: const Duration(milliseconds: 500),
@@ -64,12 +79,33 @@ class _ChoreoPathTreeState extends State<ChoreoPathTree> {
           ),
         ),
         const SizedBox(height: 4.0),
-        const Expanded(
-          child: SingleChildScrollView(
+        Expanded(
+          child: DefaultTabController(
+            length: tabs.length,
             child: Column(
               children: [
-                Divider(),
-                EditorSettingsTree(),
+                TabBar(isScrollable: true, tabs: tabs),
+                const SizedBox(height: 4.0),
+                const Expanded(
+                  child: TabBarView(
+                    children: [
+                      SingleChildScrollView(
+                        child: Column(
+                          children: [
+                            Divider(),
+                          ],
+                        ),
+                      ),
+                      SingleChildScrollView(
+                        child: Column(
+                          children: [
+                            EditorSettingsTree(),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),

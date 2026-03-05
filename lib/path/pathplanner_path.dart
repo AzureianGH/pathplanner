@@ -15,6 +15,7 @@ import 'package:pathplanner/path/goal_end_state.dart';
 import 'package:pathplanner/path/path_constraints.dart';
 import 'package:pathplanner/path/path_point.dart';
 import 'package:pathplanner/path/ideal_starting_state.dart';
+import 'package:pathplanner/path/optimization_boundary.dart';
 import 'package:pathplanner/path/point_towards_zone.dart';
 import 'package:pathplanner/path/rotation_target.dart';
 import 'package:pathplanner/path/waypoint.dart';
@@ -26,6 +27,7 @@ import 'package:pathplanner/util/wpimath/math_util.dart';
 const double targetIncrement = 0.05;
 const double targetSpacing = 0.2;
 const String fileVersion = '2025.0';
+const String pathObjectsFileVersion = '2026.0';
 
 class PathPlannerPath {
   String name;
@@ -34,6 +36,9 @@ class PathPlannerPath {
   PathConstraints globalConstraints;
   GoalEndState goalEndState;
   List<ConstraintsZone> constraintZones;
+  List<OptimizationBoundary> optimizationBoundaries;
+  List<Translation2d> optimizationReferencePath;
+  double optimizationReferenceAdherence;
   List<PointTowardsZone> pointTowardsZones;
   List<RotationTarget> rotationTargets;
   List<EventMarker> eventMarkers;
@@ -55,6 +60,7 @@ class PathPlannerPath {
   bool pointTowardsZonesExpanded = false;
   bool previewStartingStateExpanded = false;
   bool pathOptimizationExpanded = false;
+  bool pathFinderExpanded = false;
   DateTime lastModified = DateTime.now().toUtc();
 
   PathPlannerPath({
@@ -63,6 +69,9 @@ class PathPlannerPath {
     required this.globalConstraints,
     required this.goalEndState,
     required this.constraintZones,
+    List<OptimizationBoundary>? optimizationBoundaries,
+    List<Translation2d>? optimizationReferencePath,
+    double? optimizationReferenceAdherence,
     required this.pointTowardsZones,
     required this.rotationTargets,
     required this.eventMarkers,
@@ -72,7 +81,11 @@ class PathPlannerPath {
     required this.folder,
     required this.idealStartingState,
     required this.useDefaultConstraints,
-  }) : pathPoints = [] {
+  })  : optimizationBoundaries = optimizationBoundaries ?? [],
+        optimizationReferencePath = optimizationReferencePath ?? [],
+        optimizationReferenceAdherence =
+            (optimizationReferenceAdherence ?? 0.5).clamp(0.0, 1.0),
+        pathPoints = [] {
     // Set the up the values of linked waypoints
     for (int i = 0; i < waypoints.length; i++) {
       final w = waypoints[i];
@@ -106,6 +119,9 @@ class PathPlannerPath {
         globalConstraints = constraints ?? PathConstraints(),
         goalEndState = GoalEndState(0, const Rotation2d()),
         constraintZones = [],
+        optimizationBoundaries = [],
+        optimizationReferencePath = [],
+        optimizationReferenceAdherence = 0.5,
         pointTowardsZones = [],
         rotationTargets = [],
         eventMarkers = [],
@@ -172,9 +188,68 @@ class PathPlannerPath {
       File pathFile = fs.file(join(pathDir, '$name.path'));
       const JsonEncoder encoder = JsonEncoder.withIndent('  ');
       pathFile.writeAsString(encoder.convert(this));
+      _savePathObjectsFile();
       lastModified = DateTime.now().toUtc();
     } catch (ex, stack) {
       Log.error('Failed to save path: $name', ex, stack);
+    }
+  }
+
+  void _savePathObjectsFile() {
+    try {
+      final file = fs.file(join(pathDir, '$name.pathobjects'));
+      const JsonEncoder encoder = JsonEncoder.withIndent('  ');
+      final json = {
+        'version': pathObjectsFileVersion,
+        'optimizationBoundaries': [
+          for (final boundary in optimizationBoundaries) boundary.toJson(),
+        ],
+        'optimizationReferencePath': [
+          for (final point in optimizationReferencePath)
+            {
+              'x': point.x,
+              'y': point.y,
+            },
+        ],
+        'optimizationReferenceAdherence':
+            optimizationReferenceAdherence.clamp(0.0, 1.0),
+      };
+
+      file.writeAsString(encoder.convert(json));
+    } catch (ex, stack) {
+      Log.error('Failed to save path objects: $name', ex, stack);
+    }
+  }
+
+  Future<void> _loadPathObjectsFile() async {
+    final file = fs.file(join(pathDir, '$name.pathobjects'));
+    if (!await file.exists()) {
+      return;
+    }
+
+    try {
+      final jsonStr = await file.readAsString();
+      final json = jsonDecode(jsonStr) as Map<String, dynamic>;
+
+      optimizationBoundaries = [
+        for (final boundaryJson in (json['optimizationBoundaries'] ?? []))
+          OptimizationBoundary.fromJson(boundaryJson),
+      ];
+
+      optimizationReferencePath = [
+        for (final pointJson in (json['optimizationReferencePath'] ?? []))
+          Translation2d(
+            (pointJson['x'] ?? 0.0).toDouble(),
+            (pointJson['y'] ?? 0.0).toDouble(),
+          ),
+      ];
+
+      optimizationReferenceAdherence =
+          ((json['optimizationReferenceAdherence'] ?? 0.5) as num)
+              .toDouble()
+              .clamp(0.0, 1.0);
+    } catch (ex, stack) {
+      Log.error('Failed to load path objects: $name', ex, stack);
     }
   }
 
@@ -193,6 +268,7 @@ class PathPlannerPath {
 
           PathPlannerPath path =
               PathPlannerPath.fromJson(json, pathName, pathsDir, fs);
+          await path._loadPathObjectsFile();
           path.lastModified = (await file.lastModified()).toUtc();
 
           if (json['version'] != fileVersion) {
@@ -210,17 +286,25 @@ class PathPlannerPath {
 
   void deletePath() {
     File pathFile = fs.file(join(pathDir, '$name.path'));
+    File pathObjectsFile = fs.file(join(pathDir, '$name.pathobjects'));
 
     if (pathFile.existsSync()) {
       pathFile.delete();
+    }
+    if (pathObjectsFile.existsSync()) {
+      pathObjectsFile.delete();
     }
   }
 
   void renamePath(String name) {
     File pathFile = fs.file(join(pathDir, '${this.name}.path'));
+    File pathObjectsFile = fs.file(join(pathDir, '${this.name}.pathobjects'));
 
     if (pathFile.existsSync()) {
       pathFile.rename(join(pathDir, '$name.path'));
+    }
+    if (pathObjectsFile.existsSync()) {
+      pathObjectsFile.rename(join(pathDir, '$name.pathobjects'));
     }
     this.name = name;
     lastModified = DateTime.now().toUtc();
@@ -723,6 +807,11 @@ class PathPlannerPath {
       globalConstraints: globalConstraints.clone(),
       goalEndState: goalEndState.clone(),
       constraintZones: cloneConstraintZones(constraintZones),
+      optimizationBoundaries:
+          cloneOptimizationBoundaries(optimizationBoundaries),
+      optimizationReferencePath:
+          cloneOptimizationReferencePath(optimizationReferencePath),
+      optimizationReferenceAdherence: optimizationReferenceAdherence,
       pointTowardsZones: clonePointTowardsZones(pointTowardsZones),
       rotationTargets: cloneRotationTargets(rotationTargets),
       eventMarkers: cloneEventMarkers(eventMarkers),
@@ -759,6 +848,20 @@ class PathPlannerPath {
     ];
   }
 
+  static List<OptimizationBoundary> cloneOptimizationBoundaries(
+      List<OptimizationBoundary> boundaries) {
+    return [
+      for (final boundary in boundaries) boundary.clone(),
+    ];
+  }
+
+  static List<Translation2d> cloneOptimizationReferencePath(
+      List<Translation2d> referencePath) {
+    return [
+      for (final point in referencePath) Translation2d(point.x, point.y),
+    ];
+  }
+
   static List<RotationTarget> cloneRotationTargets(
       List<RotationTarget> targets) {
     return [
@@ -782,11 +885,24 @@ class PathPlannerPath {
       other.reversed == reversed &&
       listEquals(other.waypoints, waypoints) &&
       listEquals(other.constraintZones, constraintZones) &&
+      listEquals(other.optimizationBoundaries, optimizationBoundaries) &&
+      listEquals(other.optimizationReferencePath, optimizationReferencePath) &&
+      other.optimizationReferenceAdherence == optimizationReferenceAdherence &&
       listEquals(other.pointTowardsZones, pointTowardsZones) &&
       listEquals(other.eventMarkers, eventMarkers) &&
       listEquals(other.rotationTargets, rotationTargets);
 
   @override
-  int get hashCode => Object.hash(name, globalConstraints, goalEndState,
-      waypoints, constraintZones, eventMarkers, rotationTargets, reversed);
+  int get hashCode => Object.hash(
+      name,
+      globalConstraints,
+      goalEndState,
+      waypoints,
+      constraintZones,
+      optimizationBoundaries,
+      optimizationReferencePath,
+      optimizationReferenceAdherence,
+      eventMarkers,
+      rotationTargets,
+      reversed);
 }

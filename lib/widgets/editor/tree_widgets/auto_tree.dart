@@ -15,6 +15,7 @@ class AutoTree extends StatefulWidget {
   final num? autoRuntime;
   final Function(String?)? onEditPathPressed;
   final VoidCallback? onRenderAuto;
+  final VoidCallback? onCollapseRequested;
 
   const AutoTree({
     super.key,
@@ -27,6 +28,7 @@ class AutoTree extends StatefulWidget {
     this.autoRuntime,
     this.onEditPathPressed,
     this.onRenderAuto,
+    this.onCollapseRequested,
   });
 
   @override
@@ -37,6 +39,10 @@ class _AutoTreeState extends State<AutoTree> {
   @override
   Widget build(BuildContext context) {
     ColorScheme colorScheme = Theme.of(context).colorScheme;
+    final tabs = [
+      const Tab(text: 'Commands'),
+      const Tab(text: 'Settings'),
+    ];
 
     return Column(
       children: [
@@ -54,6 +60,14 @@ class _AutoTreeState extends State<AutoTree> {
               ),
               Row(
                 children: [
+                  Tooltip(
+                    message: 'Collapse Commands Menu',
+                    waitDuration: const Duration(milliseconds: 500),
+                    child: IconButton(
+                      onPressed: widget.onCollapseRequested,
+                      icon: const Icon(Icons.keyboard_double_arrow_right),
+                    ),
+                  ),
                   Tooltip(
                     message: 'Export Auto to Image',
                     waitDuration: const Duration(milliseconds: 500),
@@ -77,33 +91,54 @@ class _AutoTreeState extends State<AutoTree> {
         ),
         const SizedBox(height: 4.0),
         Expanded(
-          child: SingleChildScrollView(
+          child: DefaultTabController(
+            length: tabs.length,
             child: Column(
               children: [
-                Card(
-                  elevation: 1.0,
-                  color: colorScheme.surface,
-                  surfaceTintColor: colorScheme.surfaceTint,
-                  child: Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: CommandGroupWidget(
-                      command: widget.auto.sequence,
-                      allPathNames: widget.allPathNames,
-                      onPathCommandHovered: widget.onPathHovered,
-                      onUpdated: widget.onAutoChanged,
-                      undoStack: widget.undoStack,
-                      showEditPathButton: !widget.auto.choreoAuto,
-                      onEditPathPressed: widget.onEditPathPressed,
-                    ),
+                TabBar(isScrollable: true, tabs: tabs),
+                const SizedBox(height: 4.0),
+                Expanded(
+                  child: TabBarView(
+                    children: [
+                      SingleChildScrollView(
+                        child: Column(
+                          children: [
+                            Card(
+                              elevation: 1.0,
+                              color: colorScheme.surface,
+                              surfaceTintColor: colorScheme.surfaceTint,
+                              child: Padding(
+                                padding: const EdgeInsets.all(8.0),
+                                child: CommandGroupWidget(
+                                  command: widget.auto.sequence,
+                                  rootGroup: widget.auto.sequence,
+                                  allPathNames: widget.allPathNames,
+                                  onPathCommandHovered: widget.onPathHovered,
+                                  onUpdated: widget.onAutoChanged,
+                                  undoStack: widget.undoStack,
+                                  showEditPathButton: !widget.auto.choreoAuto,
+                                  onEditPathPressed: widget.onEditPathPressed,
+                                ),
+                              ),
+                            ),
+                            ResetOdomTree(
+                              auto: widget.auto,
+                              onAutoChanged: widget.onAutoChanged,
+                              undoStack: widget.undoStack,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SingleChildScrollView(
+                        child: Column(
+                          children: [
+                            EditorSettingsTree(),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                ResetOdomTree(
-                  auto: widget.auto,
-                  onAutoChanged: widget.onAutoChanged,
-                  undoStack: widget.undoStack,
-                ),
-                const Divider(),
-                const EditorSettingsTree(),
               ],
             ),
           ),

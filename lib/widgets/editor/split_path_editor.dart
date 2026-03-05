@@ -5,9 +5,11 @@ import 'package:flutter/services.dart';
 import 'package:multi_split_view/multi_split_view.dart';
 import 'package:pathplanner/path/constraints_zone.dart';
 import 'package:pathplanner/path/event_marker.dart';
+import 'package:pathplanner/path/field_constraints_profile.dart';
 import 'package:pathplanner/path/path_constraints.dart';
 import 'package:pathplanner/path/pathplanner_path.dart';
 import 'package:pathplanner/path/point_towards_zone.dart';
+import 'package:pathplanner/path/optimization_boundary.dart';
 import 'package:pathplanner/path/rotation_target.dart';
 import 'package:pathplanner/path/waypoint.dart';
 import 'package:pathplanner/services/log.dart';
@@ -27,10 +29,19 @@ import 'package:pathplanner/util/path_painter_util.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:undo/undo.dart';
 
+enum _BoundaryDragMode {
+  draw,
+  move,
+  resize,
+  rotate,
+}
+
 class SplitPathEditor extends StatefulWidget {
   final SharedPreferences prefs;
   final PathPlannerPath path;
   final FieldImage fieldImage;
+  final FieldConstraintsProfile fieldProfile;
+  final List<String> hiddenFieldZoneNames;
   final ChangeStack undoStack;
   final PPLibTelemetry? telemetry;
   final bool hotReload;
@@ -41,6 +52,8 @@ class SplitPathEditor extends StatefulWidget {
     required this.prefs,
     required this.path,
     required this.fieldImage,
+    required this.fieldProfile,
+    required this.hiddenFieldZoneNames,
     required this.undoStack,
     this.telemetry,
     this.hotReload = false,
@@ -69,6 +82,7 @@ class _SplitPathEditorState extends State<SplitPathEditor>
   int? _hoveredMarker;
   int? _selectedMarker;
   late bool _treeOnRight;
+  late String _layoutPreset;
   Waypoint? _draggedPoint;
   Waypoint? _dragOldValue;
   int? _draggedRotationIdx;
@@ -76,7 +90,16 @@ class _SplitPathEditorState extends State<SplitPathEditor>
   Rotation2d? _dragRotationOldValue;
   PathPlannerTrajectory? _simTraj;
   bool _paused = false;
+  bool _treeCollapsed = false;
   late bool _holonomicMode;
+  bool _boundaryDrawMode = false;
+  bool _referencePathDrawMode = false;
+  int? _selectedBoundaryIdx;
+  _BoundaryDragMode? _boundaryDragMode;
+  int? _boundaryResizeCorner;
+  Translation2d? _boundaryDragStartPos;
+  List<OptimizationBoundary>? _boundaryDragStartSnapshot;
+  List<Translation2d> _referencePathDraft = [];
 
   PathPlannerPath? _optimizedPath;
 
@@ -99,6 +122,8 @@ class _SplitPathEditorState extends State<SplitPathEditor>
 
     _treeOnRight =
         widget.prefs.getBool(PrefsKeys.treeOnRight) ?? Defaults.treeOnRight;
+    _layoutPreset = widget.prefs.getString(PrefsKeys.editorLayoutPreset) ??
+      Defaults.editorLayoutPreset;
 
     var width =
         widget.prefs.getDouble(PrefsKeys.robotWidth) ?? Defaults.robotWidth;
@@ -116,13 +141,15 @@ class _SplitPathEditorState extends State<SplitPathEditor>
     _controller.areas = [
       Area(
         weight: _treeOnRight ? (1.0 - treeWeight) : treeWeight,
-        minimalWeight: 0.4,
+        minimalWeight: 0.08,
       ),
       Area(
         weight: _treeOnRight ? treeWeight : (1.0 - treeWeight),
-        minimalWeight: 0.4,
+        minimalWeight: 0.08,
       ),
     ];
+
+    _applyLayoutPreset(_layoutPreset, savePref: false);
 
     WidgetsBinding.instance.addPostFrameCallback((_) => _simulatePath());
   }
@@ -148,6 +175,30 @@ class _SplitPathEditorState extends State<SplitPathEditor>
                 if (!currentScope.hasPrimaryFocus && currentScope.hasFocus) {
                   FocusManager.instance.primaryFocus!.unfocus();
                 }
+
+                final tapPos = Translation2d(
+                  _xPixelsToMeters(details.localPosition.dx),
+                  _yPixelsToMeters(details.localPosition.dy),
+                );
+
+                int? boundaryHit;
+                for (int i = widget.path.optimizationBoundaries.length - 1;
+                    i >= 0;
+                    i--) {
+                  if (widget.path.optimizationBoundaries[i]
+                      .containsPoint(tapPos)) {
+                    boundaryHit = i;
+                    break;
+                  }
+                }
+
+                if (boundaryHit != null) {
+                  setState(() {
+                    _selectedBoundaryIdx = boundaryHit;
+                  });
+                  return;
+                }
+
                 for (int i = waypoints.length - 1; i >= 0; i--) {
                   Waypoint w = waypoints[i];
                   if (w.isPointInAnchor(
@@ -170,6 +221,9 @@ class _SplitPathEditorState extends State<SplitPathEditor>
                   }
                 }
                 _setSelectedWaypoint(null);
+                setState(() {
+                  _selectedBoundaryIdx = null;
+                });
               },
               onDoubleTapDown: (details) {
                 widget.undoStack.add(Change(
@@ -197,6 +251,61 @@ class _SplitPathEditorState extends State<SplitPathEditor>
               onPanStart: (details) {
                 double xPos = _xPixelsToMeters(details.localPosition.dx);
                 double yPos = _yPixelsToMeters(details.localPosition.dy);
+
+                final panStartPos = Translation2d(xPos, yPos);
+
+                if (_referencePathDrawMode) {
+                  setState(() {
+                    _referencePathDraft = [panStartPos];
+                    _optimizedPath = null;
+                  });
+                  return;
+                }
+
+                if (_boundaryDrawMode) {
+                  final startSnapshot =
+                      PathPlannerPath.cloneOptimizationBoundaries(
+                          widget.path.optimizationBoundaries);
+                  final newBoundary = OptimizationBoundary(
+                    x: panStartPos.x.toDouble(),
+                    y: panStartPos.y.toDouble(),
+                    width: 0.05,
+                    height: 0.05,
+                    rotationDeg: 0.0,
+                    tolerance: 0.0,
+                  );
+                  setState(() {
+                    widget.path.optimizationBoundaries.add(newBoundary);
+                    _selectedBoundaryIdx =
+                        widget.path.optimizationBoundaries.length - 1;
+                    _boundaryDragMode = _BoundaryDragMode.draw;
+                    _boundaryDragStartPos = panStartPos;
+                    _boundaryDragStartSnapshot = startSnapshot;
+                    _boundaryDrawMode = false;
+                    _optimizedPath = null;
+                  });
+                  return;
+                }
+
+                final boundaryInteraction = _hitTestBoundaryInteraction(
+                  panStartPos,
+                  _pixelsToMeters(PathPainterUtil.uiPointSizeToPixels(
+                      20, PathPainter.scale, widget.fieldImage)),
+                );
+
+                if (boundaryInteraction != null) {
+                  setState(() {
+                    _selectedBoundaryIdx = boundaryInteraction.$1;
+                    _boundaryDragMode = boundaryInteraction.$2;
+                    _boundaryResizeCorner = boundaryInteraction.$3;
+                    _boundaryDragStartPos = panStartPos;
+                    _boundaryDragStartSnapshot =
+                        PathPlannerPath.cloneOptimizationBoundaries(
+                            widget.path.optimizationBoundaries);
+                    _optimizedPath = null;
+                  });
+                  return;
+                }
 
                 for (int i = waypoints.length - 1; i >= 0; i--) {
                   Waypoint w = waypoints[i];
@@ -257,7 +366,20 @@ class _SplitPathEditorState extends State<SplitPathEditor>
                 }
               },
               onPanUpdate: (details) {
-                if (_draggedPoint != null) {
+                if (_referencePathDrawMode && _referencePathDraft.isNotEmpty) {
+                  _appendReferenceDraftPoint(Translation2d(
+                    _xPixelsToMeters(details.localPosition.dx),
+                    _yPixelsToMeters(details.localPosition.dy),
+                  ));
+                } else if (_boundaryDragMode != null &&
+                    _selectedBoundaryIdx != null) {
+                  _updateBoundaryDrag(
+                    Translation2d(
+                      _xPixelsToMeters(details.localPosition.dx),
+                      _yPixelsToMeters(details.localPosition.dy),
+                    ),
+                  );
+                } else if (_draggedPoint != null) {
                   num targetX = _xPixelsToMeters(min(
                       88 +
                           (widget.fieldImage.defaultSize.width *
@@ -340,7 +462,11 @@ class _SplitPathEditorState extends State<SplitPathEditor>
                 }
               },
               onPanEnd: (details) {
-                if (_draggedPoint != null) {
+                if (_referencePathDrawMode) {
+                  _commitReferencePathDraw();
+                } else if (_boundaryDragMode != null) {
+                  _commitBoundaryDrag();
+                } else if (_draggedPoint != null) {
                   _draggedPoint!.stopDragging();
                   int index = waypoints.indexOf(_draggedPoint!);
                   Waypoint dragEnd = _draggedPoint!.clone();
@@ -455,6 +581,10 @@ class _SplitPathEditorState extends State<SplitPathEditor>
                         painter: PathPainter(
                           colorScheme: colorScheme,
                           paths: [widget.path],
+                          fieldObjects: widget.fieldProfile.objects,
+                          fieldZones: widget.fieldProfile.zones,
+                          hiddenFieldZoneNames:
+                              widget.hiddenFieldZoneNames.toSet(),
                           simple: false,
                           fieldImage: widget.fieldImage,
                           hoveredWaypoint: _hoveredWaypoint,
@@ -471,6 +601,11 @@ class _SplitPathEditorState extends State<SplitPathEditor>
                           animation: _previewController.view,
                           prefs: widget.prefs,
                           optimizedPath: _optimizedPath,
+                          selectedBoundary: _selectedBoundaryIdx,
+                          boundaryDrawMode: _boundaryDrawMode,
+                          referencePath: widget.path.optimizationReferencePath,
+                          referencePathDrawMode: _referencePathDrawMode,
+                          drawingReferencePathPoints: _referencePathDraft,
                         ),
                       ),
                     ),
@@ -491,6 +626,8 @@ class _SplitPathEditorState extends State<SplitPathEditor>
             axis: Axis.horizontal,
             controller: _controller,
             onWeightChange: () {
+              if (_treeCollapsed) return;
+
               double? newWeight = _treeOnRight
                   ? _controller.areas[1].weight
                   : _controller.areas[0].weight;
@@ -504,77 +641,73 @@ class _SplitPathEditorState extends State<SplitPathEditor>
                   onPauseStateChanged: (value) => _paused = value,
                   totalPathTime: _simTraj?.states.last.timeSeconds ?? 1.0,
                 ),
-              Card(
-                margin: const EdgeInsets.all(0),
-                elevation: 4.0,
-                color: colorScheme.surface,
-                surfaceTintColor: colorScheme.surfaceTint,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.only(
-                    topLeft:
-                        _treeOnRight ? const Radius.circular(12) : Radius.zero,
-                    topRight:
-                        _treeOnRight ? Radius.zero : const Radius.circular(12),
-                    bottomLeft:
-                        _treeOnRight ? const Radius.circular(12) : Radius.zero,
-                    bottomRight:
-                        _treeOnRight ? Radius.zero : const Radius.circular(12),
-                  ),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: PathTree(
-                    path: widget.path,
-                    pathRuntime: _simTraj?.getTotalTimeSeconds(),
-                    runtimeDisplay: _runtimeDisplay,
-                    initiallySelectedWaypoint: _selectedWaypoint,
-                    initiallySelectedZone: _selectedZone,
-                    initiallySelectedRotTarget: _selectedRotTarget,
-                    initiallySelectedPointZone: _selectedPointZone,
-                    initiallySelectedMarker: _selectedMarker,
-                    waypointsTreeController: _waypointsTreeController,
-                    undoStack: widget.undoStack,
-                    holonomicMode: _holonomicMode,
-                    defaultConstraints: _getDefaultConstraints(),
-                    prefs: widget.prefs,
-                    fieldSizeMeters: widget.fieldImage.getFieldSizeMeters(),
-                    onRenderPath: () {
-                      if (_simTraj != null) {
-                        showDialog(
-                            context: context,
-                            builder: (context) {
-                              return TrajectoryRenderDialog(
-                                fieldImage: widget.fieldImage,
-                                prefs: widget.prefs,
-                                trajectory: _simTraj!,
-                              );
-                            });
-                      }
-                    },
-                    onPathChanged: () {
-                      setState(() {
-                        widget.path.generateAndSavePath();
-                        _simulatePath();
-                      });
+              if (!_treeCollapsed)
+                Card(
+                  margin: const EdgeInsets.all(0),
+                  elevation: 2.0,
+                  color: colorScheme.surface,
+                  surfaceTintColor: colorScheme.surfaceTint,
+                  child: Padding(
+                    padding: const EdgeInsets.all(4.0),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        return _buildResponsiveTreeScale(
+                          constraints.maxWidth,
+                          PathTree(
+                            path: widget.path,
+                            pathRuntime: _simTraj?.getTotalTimeSeconds(),
+                            runtimeDisplay: _runtimeDisplay,
+                            initiallySelectedWaypoint: _selectedWaypoint,
+                            initiallySelectedZone: _selectedZone,
+                            initiallySelectedRotTarget: _selectedRotTarget,
+                            initiallySelectedPointZone: _selectedPointZone,
+                            initiallySelectedMarker: _selectedMarker,
+                            waypointsTreeController: _waypointsTreeController,
+                            undoStack: widget.undoStack,
+                            holonomicMode: _holonomicMode,
+                            defaultConstraints: _getDefaultConstraints(),
+                            prefs: widget.prefs,
+                            fieldSizeMeters:
+                                widget.fieldImage.getFieldSizeMeters(),
+                            alwaysFieldObjects:
+                              widget.fieldProfile.objectBoundaries(),
+                            onRenderPath: () {
+                              if (_simTraj != null) {
+                                showDialog(
+                                    context: context,
+                                    builder: (context) {
+                                      return TrajectoryRenderDialog(
+                                        fieldImage: widget.fieldImage,
+                                        prefs: widget.prefs,
+                                        trajectory: _simTraj!,
+                                      );
+                                    });
+                              }
+                            },
+                            onPathChanged: () {
+                              setState(() {
+                                widget.path.generateAndSavePath();
+                                _simulatePath();
+                              });
 
-                      if (widget.hotReload) {
-                        widget.telemetry?.hotReloadPath(widget.path);
-                      }
+                              if (widget.hotReload) {
+                                widget.telemetry?.hotReloadPath(widget.path);
+                              }
 
-                      widget.onPathChanged?.call();
-                    },
-                    onPathChangedNoSim: () {
-                      setState(() {
-                        widget.path.generateAndSavePath();
-                      });
+                              widget.onPathChanged?.call();
+                            },
+                            onPathChangedNoSim: () {
+                              setState(() {
+                                widget.path.generateAndSavePath();
+                              });
 
-                      if (widget.hotReload) {
-                        widget.telemetry?.hotReloadPath(widget.path);
-                      }
+                              if (widget.hotReload) {
+                                widget.telemetry?.hotReloadPath(widget.path);
+                              }
 
-                      widget.onPathChanged?.call();
-                    },
-                    onWaypointDeleted: (waypointIdx) {
+                              widget.onPathChanged?.call();
+                            },
+                            onWaypointDeleted: (waypointIdx) {
                       widget.undoStack.add(Change(
                         [
                           PathPlannerPath.cloneWaypoints(widget.path.waypoints),
@@ -667,67 +800,102 @@ class _SplitPathEditorState extends State<SplitPathEditor>
                         },
                       ));
                     },
-                    onSideSwapped: () => setState(() {
-                      _treeOnRight = !_treeOnRight;
-                      widget.prefs.setBool(PrefsKeys.treeOnRight, _treeOnRight);
-                      _controller.areas = _controller.areas.reversed.toList();
-                    }),
-                    onWaypointHovered: (value) {
-                      setState(() {
-                        _hoveredWaypoint = value;
-                      });
-                    },
-                    onWaypointSelected: (value) {
-                      setState(() {
-                        _selectedWaypoint = value;
-                      });
-                    },
-                    onZoneHovered: (value) {
-                      setState(() {
-                        _hoveredZone = value;
-                      });
-                    },
-                    onZoneSelected: (value) {
-                      setState(() {
-                        _selectedZone = value;
-                      });
-                    },
-                    onPointZoneHovered: (value) {
-                      setState(() {
-                        _hoveredPointZone = value;
-                      });
-                    },
-                    onPointZoneSelected: (value) {
-                      setState(() {
-                        _selectedPointZone = value;
-                      });
-                    },
-                    onRotTargetHovered: (value) {
-                      setState(() {
-                        _hoveredRotTarget = value;
-                      });
-                    },
-                    onRotTargetSelected: (value) {
-                      setState(() {
-                        _selectedRotTarget = value;
-                      });
-                    },
-                    onMarkerHovered: (value) {
-                      setState(() {
-                        _hoveredMarker = value;
-                      });
-                    },
-                    onMarkerSelected: (value) {
-                      setState(() {
-                        _selectedMarker = value;
-                      });
-                    },
-                    onOptimizationUpdate: (result) => setState(() {
-                      _optimizedPath = result;
-                    }),
+                            onSideSwapped: () => setState(() {
+                              _treeOnRight = !_treeOnRight;
+                              widget.prefs
+                                  .setBool(PrefsKeys.treeOnRight, _treeOnRight);
+                              _controller.areas =
+                                  _controller.areas.reversed.toList();
+                            }),
+                            onCollapseRequested: () {
+                              setState(() {
+                                _treeCollapsed = true;
+                              });
+                            },
+                                    onStartBoundaryDraw: () {
+                                      setState(() {
+                                        _boundaryDrawMode = true;
+                                        _referencePathDrawMode = false;
+                                        _referencePathDraft = [];
+                                        _selectedBoundaryIdx = null;
+                                      });
+                                    },
+                                    onStartReferencePathDraw: () {
+                                      setState(() {
+                                        _referencePathDrawMode = true;
+                                        _boundaryDrawMode = false;
+                                        _boundaryDragMode = null;
+                                        _selectedBoundaryIdx = null;
+                                        _referencePathDraft = [];
+                                        _optimizedPath = null;
+                                      });
+                                    },
+                                    onClearReferencePath: () {
+                                      setState(() {
+                                        _referencePathDrawMode = false;
+                                        _referencePathDraft = [];
+                                        _optimizedPath = null;
+                                      });
+                                    },
+                            onWaypointHovered: (value) {
+                              setState(() {
+                                _hoveredWaypoint = value;
+                              });
+                            },
+                            onWaypointSelected: (value) {
+                              setState(() {
+                                _selectedWaypoint = value;
+                              });
+                            },
+                            onZoneHovered: (value) {
+                              setState(() {
+                                _hoveredZone = value;
+                              });
+                            },
+                            onZoneSelected: (value) {
+                              setState(() {
+                                _selectedZone = value;
+                              });
+                            },
+                            onPointZoneHovered: (value) {
+                              setState(() {
+                                _hoveredPointZone = value;
+                              });
+                            },
+                            onPointZoneSelected: (value) {
+                              setState(() {
+                                _selectedPointZone = value;
+                              });
+                            },
+                            onRotTargetHovered: (value) {
+                              setState(() {
+                                _hoveredRotTarget = value;
+                              });
+                            },
+                            onRotTargetSelected: (value) {
+                              setState(() {
+                                _selectedRotTarget = value;
+                              });
+                            },
+                            onMarkerHovered: (value) {
+                              setState(() {
+                                _hoveredMarker = value;
+                              });
+                            },
+                            onMarkerSelected: (value) {
+                              setState(() {
+                                _selectedMarker = value;
+                              });
+                            },
+                            onOptimizationUpdate: (result) => setState(() {
+                              _optimizedPath = result;
+                            }),
+                          ),
+                        );
+                      },
+                    ),
                   ),
                 ),
-              ),
               if (!_treeOnRight)
                 PreviewSeekbar(
                   previewController: _previewController,
@@ -737,6 +905,21 @@ class _SplitPathEditorState extends State<SplitPathEditor>
             ],
           ),
         ),
+        if (_treeCollapsed)
+          Positioned(
+            top: 12,
+            right: _treeOnRight ? 12 : null,
+            left: _treeOnRight ? null : 12,
+            child: FilledButton.icon(
+              onPressed: () {
+                setState(() {
+                  _treeCollapsed = false;
+                });
+              },
+              icon: const Icon(Icons.keyboard_double_arrow_left),
+              label: const Text('Menu'),
+            ),
+          ),
       ],
     );
   }
@@ -805,9 +988,6 @@ class _SplitPathEditorState extends State<SplitPathEditor>
         ),
         backgroundColor: Theme.of(context).colorScheme.errorContainer,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-        ),
         action: SnackBarAction(
           label: 'Dismiss',
           textColor: Theme.of(context).colorScheme.onErrorContainer,
@@ -837,6 +1017,193 @@ class _SplitPathEditorState extends State<SplitPathEditor>
     }
 
     return pos;
+  }
+
+  (int, _BoundaryDragMode, int?)? _hitTestBoundaryInteraction(
+      Translation2d posMeters, num handleRadiusMeters) {
+    for (int i = widget.path.optimizationBoundaries.length - 1; i >= 0; i--) {
+      final boundary = widget.path.optimizationBoundaries[i];
+
+      final rotateHandle = boundary.rotationHandle();
+      if (rotateHandle.getDistance(posMeters) <= handleRadiusMeters) {
+        return (i, _BoundaryDragMode.rotate, null);
+      }
+
+      final corners = boundary.corners();
+      for (int cornerIdx = 0; cornerIdx < corners.length; cornerIdx++) {
+        final corner = corners[cornerIdx];
+        if (corner.getDistance(posMeters) <= handleRadiusMeters) {
+          return (i, _BoundaryDragMode.resize, cornerIdx);
+        }
+      }
+
+      if (boundary.containsPoint(posMeters)) {
+        return (i, _BoundaryDragMode.move, null);
+      }
+    }
+
+    return null;
+  }
+
+  void _updateBoundaryDrag(Translation2d currentPos) {
+    if (_selectedBoundaryIdx == null ||
+        _boundaryDragMode == null ||
+        _selectedBoundaryIdx! < 0 ||
+        _selectedBoundaryIdx! >= widget.path.optimizationBoundaries.length) {
+      return;
+    }
+
+    final boundary = widget.path.optimizationBoundaries[_selectedBoundaryIdx!];
+    final snapshot = _boundaryDragStartSnapshot;
+    final dragStartBoundary = (snapshot != null &&
+            _selectedBoundaryIdx! < snapshot.length)
+        ? snapshot[_selectedBoundaryIdx!]
+        : boundary;
+    final startPos = _boundaryDragStartPos;
+
+    if (startPos == null) {
+      return;
+    }
+
+    setState(() {
+      switch (_boundaryDragMode!) {
+        case _BoundaryDragMode.draw:
+          final minX = min(startPos.x, currentPos.x);
+          final minY = min(startPos.y, currentPos.y);
+          final maxX = max(startPos.x, currentPos.x);
+          final maxY = max(startPos.y, currentPos.y);
+          boundary.x = minX.toDouble();
+          boundary.y = minY.toDouble();
+          boundary.width = max(0.05, maxX - minX).toDouble();
+          boundary.height = max(0.05, maxY - minY).toDouble();
+          boundary.rotationDeg = 0.0;
+          break;
+        case _BoundaryDragMode.move:
+          final delta = currentPos - startPos;
+          final center = boundary.center;
+          boundary.setFromCenter(Translation2d(center.x + delta.x, center.y + delta.y));
+          _boundaryDragStartPos = currentPos;
+          break;
+        case _BoundaryDragMode.resize:
+          final cornerIdx = _boundaryResizeCorner;
+          if (cornerIdx == null) {
+            break;
+          }
+
+          final oppositeIdx = (cornerIdx + 2) % 4;
+          final startCorners = dragStartBoundary.corners();
+          final oppositeLocal = dragStartBoundary.toLocal(startCorners[oppositeIdx]);
+          final currentLocal = dragStartBoundary.toLocal(currentPos);
+
+          final newWidth = max(0.05, (currentLocal.x - oppositeLocal.x).abs());
+          final newHeight = max(0.05, (currentLocal.y - oppositeLocal.y).abs());
+          final newCenterLocal = Translation2d(
+            (currentLocal.x + oppositeLocal.x) / 2.0,
+            (currentLocal.y + oppositeLocal.y) / 2.0,
+          );
+          final newCenterWorld = dragStartBoundary.toWorld(newCenterLocal);
+
+          boundary.width = newWidth.toDouble();
+          boundary.height = newHeight.toDouble();
+          boundary.rotationDeg = dragStartBoundary.rotationDeg;
+          boundary.setFromCenter(newCenterWorld);
+          break;
+        case _BoundaryDragMode.rotate:
+          final c = dragStartBoundary.center;
+          final angle = atan2(currentPos.y - c.y, currentPos.x - c.x);
+          boundary.rotationDeg = ((angle - (pi / 2.0)) * (180.0 / pi));
+          break;
+      }
+
+      _optimizedPath = null;
+    });
+  }
+
+  void _commitBoundaryDrag() {
+    final oldSnapshot = _boundaryDragStartSnapshot;
+    final newSnapshot =
+        PathPlannerPath.cloneOptimizationBoundaries(widget.path.optimizationBoundaries);
+
+    _boundaryDragMode = null;
+    _boundaryResizeCorner = null;
+    _boundaryDragStartPos = null;
+    _boundaryDragStartSnapshot = null;
+
+    if (oldSnapshot == null) {
+      return;
+    }
+
+    widget.undoStack.add(Change(
+      oldSnapshot,
+      () {
+        setState(() {
+          widget.path.optimizationBoundaries =
+              PathPlannerPath.cloneOptimizationBoundaries(newSnapshot);
+          _optimizedPath = null;
+        });
+        widget.onPathChanged?.call();
+      },
+      (oldValue) {
+        setState(() {
+          widget.path.optimizationBoundaries =
+              PathPlannerPath.cloneOptimizationBoundaries(oldValue);
+          _optimizedPath = null;
+        });
+        widget.onPathChanged?.call();
+      },
+    ));
+  }
+
+  void _appendReferenceDraftPoint(Translation2d point) {
+    if (_referencePathDraft.isEmpty) return;
+
+    if (_referencePathDraft.last.getDistance(point) < 0.03) {
+      return;
+    }
+
+    setState(() {
+      _referencePathDraft.add(point);
+    });
+  }
+
+  void _commitReferencePathDraw() {
+    if (_referencePathDraft.length < 2) {
+      setState(() {
+        _referencePathDrawMode = false;
+        _referencePathDraft = [];
+      });
+      return;
+    }
+
+    final oldReference = PathPlannerPath.cloneOptimizationReferencePath(
+        widget.path.optimizationReferencePath);
+    final newReference = PathPlannerPath.cloneOptimizationReferencePath(
+      _referencePathDraft,
+    );
+
+    widget.undoStack.add(Change(
+      oldReference,
+      () {
+        setState(() {
+          widget.path.optimizationReferencePath =
+              PathPlannerPath.cloneOptimizationReferencePath(newReference);
+          _referencePathDrawMode = false;
+          _referencePathDraft = [];
+          _optimizedPath = null;
+        });
+        widget.onPathChanged?.call();
+      },
+      (oldValue) {
+        setState(() {
+          widget.path.optimizationReferencePath =
+              PathPlannerPath.cloneOptimizationReferencePath(oldValue);
+          _referencePathDrawMode = false;
+          _referencePathDraft = [];
+          _optimizedPath = null;
+        });
+        widget.onPathChanged?.call();
+      },
+    ));
   }
 
   void _setSelectedWaypoint(int? waypointIdx) {
@@ -877,5 +1244,65 @@ class _SplitPathEditorState extends State<SplitPathEditor>
           widget.prefs.getDouble(PrefsKeys.defaultMaxAngAccel) ??
               Defaults.defaultMaxAngAccel,
     );
+  }
+
+  Widget _buildResponsiveTreeScale(double maxWidth, Widget child) {
+    const referenceWidth = 420.0;
+
+    double scale = 1.0;
+    if (maxWidth < referenceWidth) {
+      scale = (maxWidth / referenceWidth).clamp(0.72, 1.0);
+    }
+
+    if (scale >= 0.999) {
+      return child;
+    }
+
+    return ClipRect(
+      child: Align(
+        alignment: Alignment.topLeft,
+        child: Transform.scale(
+          scale: scale,
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: maxWidth / scale,
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _applyLayoutPreset(String preset, {bool savePref = true}) {
+    double treeWeight;
+    switch (preset) {
+      case 'compact':
+        treeWeight = 0.35;
+        break;
+      case 'focused':
+        treeWeight = 0.65;
+        break;
+      case 'balanced':
+      default:
+        treeWeight = 0.5;
+        break;
+    }
+
+    _layoutPreset = preset;
+    widget.prefs.setDouble(PrefsKeys.editorTreeWeight, treeWeight);
+    _controller.areas = [
+      Area(
+        weight: _treeOnRight ? (1.0 - treeWeight) : treeWeight,
+        minimalWeight: 0.08,
+      ),
+      Area(
+        weight: _treeOnRight ? treeWeight : (1.0 - treeWeight),
+        minimalWeight: 0.08,
+      ),
+    ];
+
+    if (savePref) {
+      widget.prefs.setString(PrefsKeys.editorLayoutPreset, preset);
+    }
   }
 }

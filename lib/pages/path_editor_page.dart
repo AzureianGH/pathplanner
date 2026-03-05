@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:pathplanner/path/field_constraints_profile.dart';
 import 'package:pathplanner/path/pathplanner_path.dart';
 import 'package:pathplanner/services/pplib_telemetry.dart';
 import 'package:pathplanner/widgets/conditional_widget.dart';
@@ -14,6 +15,8 @@ class PathEditorPage extends StatefulWidget {
   final SharedPreferences prefs;
   final PathPlannerPath path;
   final FieldImage fieldImage;
+  final FieldConstraintsProfile? fieldProfile;
+  final List<String>? hiddenFieldZoneNames;
   final ValueChanged<String> onRenamed;
   final ChangeStack undoStack;
   final bool shortcuts;
@@ -27,6 +30,8 @@ class PathEditorPage extends StatefulWidget {
     required this.prefs,
     required this.path,
     required this.fieldImage,
+    this.fieldProfile,
+    this.hiddenFieldZoneNames,
     required this.onRenamed,
     required this.undoStack,
     this.shortcuts = true,
@@ -49,6 +54,8 @@ class _PathEditorPageState extends State<PathEditorPage> {
       prefs: widget.prefs,
       path: widget.path,
       fieldImage: widget.fieldImage,
+      fieldProfile: widget.fieldProfile ?? FieldConstraintsProfile.empty(),
+      hiddenFieldZoneNames: widget.hiddenFieldZoneNames ?? const [],
       undoStack: widget.undoStack,
       telemetry: widget.telemetry,
       hotReload: widget.hotReload,

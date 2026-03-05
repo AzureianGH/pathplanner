@@ -531,6 +531,7 @@ class _EventMarkersTreeState extends State<EventMarkersTree> {
           padding: const EdgeInsets.all(16.0),
           child: CommandGroupWidget(
             command: command,
+            rootGroup: command,
             undoStack: widget.undoStack,
             onUpdated: widget.onPathChangedNoSim,
             onRemoved: () => _addRemoveCommandChange(markerIdx),

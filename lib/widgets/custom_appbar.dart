@@ -8,15 +8,22 @@ class CustomAppBar extends AppBar {
   final Widget titleWidget;
 
   CustomAppBar({
-    this.titleWidget = const Text('PathPlanner'),
+    this.titleWidget = const Text('PathPlannerX'),
     super.key,
-    super.leading,
-    super.automaticallyImplyLeading,
+    Widget? leading,
+    bool? automaticallyImplyLeading,
   }) : super(
+          leading: leading,
+          automaticallyImplyLeading: automaticallyImplyLeading ?? true,
+      centerTitle: true,
+          titleSpacing: 0,
           actions: [
             if (!Platform.isMacOS) MinimizeWindowButton(),
             if (!Platform.isMacOS) MaximizeWindowButton(),
             if (!Platform.isMacOS) CloseWindowButton(),
+            if (Platform.isMacOS &&
+                (leading != null || (automaticallyImplyLeading ?? true)))
+              const SizedBox(width: kToolbarHeight),
           ],
           title: SizedBox(
             height: 48,
@@ -25,7 +32,7 @@ class CustomAppBar extends AppBar {
                 Expanded(
                   child: _MoveWindowArea(
                     child: Container(
-                      alignment: Alignment.centerLeft,
+                      alignment: Alignment.center,
                       child: titleWidget,
                     ),
                   ),
