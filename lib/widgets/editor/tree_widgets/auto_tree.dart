@@ -16,6 +16,7 @@ class AutoTree extends StatefulWidget {
   final Function(String?)? onEditPathPressed;
   final VoidCallback? onRenderAuto;
   final VoidCallback? onCollapseRequested;
+  final VoidCallback? onMirrorRequested;
 
   const AutoTree({
     super.key,
@@ -29,6 +30,7 @@ class AutoTree extends StatefulWidget {
     this.onEditPathPressed,
     this.onRenderAuto,
     this.onCollapseRequested,
+    this.onMirrorRequested,
   });
 
   @override
@@ -60,6 +62,14 @@ class _AutoTreeState extends State<AutoTree> {
               ),
               Row(
                 children: [
+                  Tooltip(
+                    message: 'Mirror Paths in Auto',
+                    waitDuration: const Duration(milliseconds: 500),
+                    child: IconButton(
+                      onPressed: widget.onMirrorRequested,
+                      icon: const Icon(Icons.flip),
+                    ),
+                  ),
                   Tooltip(
                     message: 'Collapse Commands Menu',
                     waitDuration: const Duration(milliseconds: 500),

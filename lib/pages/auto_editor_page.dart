@@ -66,6 +66,7 @@ class _AutoEditorPageState extends State<AutoEditorPage> {
     final editorWidget = SplitAutoEditor(
       prefs: widget.prefs,
       auto: widget.auto,
+      allPaths: widget.allPaths,
       autoPaths: autoPaths,
       autoChoreoPaths: autoChoreoPaths,
       allPathNames: widget.allPathNames,

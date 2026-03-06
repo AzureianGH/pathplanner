@@ -52,6 +52,7 @@ class PathTree extends StatefulWidget {
   final VoidCallback? onStartBoundaryDraw;
   final VoidCallback? onStartReferencePathDraw;
   final VoidCallback? onClearReferencePath;
+  final VoidCallback? onMirrorRequested;
 
   const PathTree({
     super.key,
@@ -90,6 +91,7 @@ class PathTree extends StatefulWidget {
     this.onStartBoundaryDraw,
     this.onStartReferencePathDraw,
     this.onClearReferencePath,
+    this.onMirrorRequested,
   });
 
   @override
@@ -190,6 +192,14 @@ class _PathTreeState extends State<PathTree> {
           ),
           Row(
             children: [
+              Tooltip(
+                message: 'Mirror Path',
+                waitDuration: const Duration(milliseconds: 500),
+                child: IconButton(
+                  onPressed: widget.onMirrorRequested,
+                  icon: const Icon(Icons.flip),
+                ),
+              ),
               Tooltip(
                 message: 'Collapse Menu',
                 waitDuration: const Duration(milliseconds: 500),

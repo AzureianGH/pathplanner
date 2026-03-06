@@ -1,4 +1,8 @@
+import 'dart:math';
+
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:multi_split_view/multi_split_view.dart';
 import 'package:pathplanner/auto/pathplanner_auto.dart';
 import 'package:pathplanner/path/choreo_path.dart';
@@ -6,6 +10,8 @@ import 'package:pathplanner/services/log.dart';
 import 'package:pathplanner/trajectory/config.dart';
 import 'package:pathplanner/trajectory/trajectory.dart';
 import 'package:pathplanner/path/pathplanner_path.dart';
+import 'package:pathplanner/util/mirror_util.dart';
+import 'package:pathplanner/util/path_painter_util.dart';
 import 'package:pathplanner/util/prefs.dart';
 import 'package:pathplanner/util/wpimath/geometry.dart';
 import 'package:pathplanner/util/wpimath/kinematics.dart';
@@ -20,6 +26,7 @@ import 'package:undo/undo.dart';
 class SplitAutoEditor extends StatefulWidget {
   final SharedPreferences prefs;
   final PathPlannerAuto auto;
+  final List<PathPlannerPath> allPaths;
   final List<PathPlannerPath> autoPaths;
   final List<ChoreoPath> autoChoreoPaths;
   final List<String> allPathNames;
@@ -31,6 +38,7 @@ class SplitAutoEditor extends StatefulWidget {
   const SplitAutoEditor({
     required this.prefs,
     required this.auto,
+    required this.allPaths,
     required this.autoPaths,
     required this.autoChoreoPaths,
     required this.allPathNames,
@@ -55,6 +63,10 @@ class _SplitAutoEditorState extends State<SplitAutoEditor>
   PathPlannerTrajectory? _simTraj;
   List<TimedPathRange> _timedPathRanges = [];
   bool _paused = false;
+  final TransformationController _viewerController = TransformationController();
+  bool _mirrorMode = false;
+  bool _mirrorModeCommandsCollapsedBefore = false;
+  double _mirrorAxisAngleRad = pi / 2.0;
 
   late AnimationController _previewController;
 
@@ -67,7 +79,7 @@ class _SplitAutoEditorState extends State<SplitAutoEditor>
     _treeOnRight =
         widget.prefs.getBool(PrefsKeys.treeOnRight) ?? Defaults.treeOnRight;
     _layoutPreset = widget.prefs.getString(PrefsKeys.editorLayoutPreset) ??
-      Defaults.editorLayoutPreset;
+        Defaults.editorLayoutPreset;
 
     double treeWeight = widget.prefs.getDouble(PrefsKeys.editorTreeWeight) ??
         Defaults.editorTreeWeight;
@@ -84,11 +96,15 @@ class _SplitAutoEditorState extends State<SplitAutoEditor>
 
     _applyLayoutPreset(_layoutPreset, savePref: false);
 
+    HardwareKeyboard.instance.addHandler(_handleKeyEvent);
+
     WidgetsBinding.instance.addPostFrameCallback((_) => _simulateAuto());
   }
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
+    _viewerController.dispose();
     _previewController.dispose();
     super.dispose();
   }
@@ -102,29 +118,79 @@ class _SplitAutoEditorState extends State<SplitAutoEditor>
         Center(
           child: InteractiveViewer(
             maxScale: 10.0,
-            child: Padding(
-              padding: const EdgeInsets.all(48),
-              child: Stack(
-                children: [
-                  widget.fieldImage.getWidget(),
-                  Positioned.fill(
-                    child: CustomPaint(
-                        painter: PathPainter(
-                            colorScheme: colorScheme,
-                            paths: widget.autoPaths,
-                            choreoPaths: widget.autoChoreoPaths,
-                            simple: true,
-                            hideOtherPathsOnHover: widget.prefs
-                                    .getBool(PrefsKeys.hidePathsOnHover) ??
-                                Defaults.hidePathsOnHover,
-                            hoveredPath: _hoveredPath,
-                            fieldImage: widget.fieldImage,
-                            simulatedPath: _simTraj,
-                            timedPathRanges: _timedPathRanges,
-                            animation: _previewController.view,
-                            prefs: widget.prefs)),
+            transformationController: _viewerController,
+            panEnabled: !_mirrorMode,
+            scaleEnabled: !_mirrorMode,
+            child: MouseRegion(
+              onHover: (details) {
+                if (_mirrorMode) {
+                  _updateMirrorAxisFromLocal(details.localPosition);
+                }
+              },
+              child: GestureDetector(
+                onTapDown: (details) {
+                  if (_mirrorMode) {
+                    _updateMirrorAxisFromLocal(details.localPosition);
+                  }
+                },
+                onTapUp: (details) {
+                  if (_mirrorMode) {
+                    _updateMirrorAxisFromLocal(details.localPosition);
+                    _applyMirrorToAutoPaths();
+                  }
+                },
+                onPanStart: (details) {
+                  if (_mirrorMode) {
+                    _updateMirrorAxisFromLocal(details.localPosition);
+                  }
+                },
+                onPanUpdate: (details) {
+                  if (_mirrorMode) {
+                    _updateMirrorAxisFromLocal(details.localPosition);
+                  }
+                },
+                onPanEnd: (details) {
+                  if (_mirrorMode) {
+                    _applyMirrorToAutoPaths();
+                  }
+                },
+                child: Padding(
+                  padding: const EdgeInsets.all(48),
+                  child: Stack(
+                    children: [
+                      widget.fieldImage.getWidget(),
+                      Positioned.fill(
+                        child: CustomPaint(
+                            painter: PathPainter(
+                                colorScheme: colorScheme,
+                                paths: widget.autoPaths,
+                                choreoPaths: widget.autoChoreoPaths,
+                                simple: true,
+                                hideOtherPathsOnHover: widget.prefs
+                                        .getBool(PrefsKeys.hidePathsOnHover) ??
+                                    Defaults.hidePathsOnHover,
+                                hoveredPath: _hoveredPath,
+                                fieldImage: widget.fieldImage,
+                                simulatedPath: _simTraj,
+                                timedPathRanges: _timedPathRanges,
+                                animation: _previewController.view,
+                                prefs: widget.prefs)),
+                      ),
+                      if (_mirrorMode)
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: CustomPaint(
+                              painter: _MirrorAxisPainter(
+                                start: _mirrorAxisStartPx,
+                                end: _mirrorAxisEndPx,
+                                color: colorScheme.primary,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           ),
@@ -210,6 +276,7 @@ class _SplitAutoEditorState extends State<SplitAutoEditor>
                                 _commandsCollapsed = true;
                               });
                             },
+                            onMirrorRequested: _startMirrorMode,
                           ),
                         );
                       },
@@ -238,6 +305,36 @@ class _SplitAutoEditorState extends State<SplitAutoEditor>
               },
               icon: const Icon(Icons.keyboard_double_arrow_left),
               label: const Text('Commands'),
+            ),
+          ),
+        if (_mirrorMode)
+          Positioned(
+            top: 12,
+            left: 12,
+            child: Card(
+              elevation: 4,
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Mirror Mode',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 4),
+                    Text('Axis: ${_mirrorAxisDegLabel}°'),
+                    const SizedBox(height: 2),
+                    const Text(
+                        'Left Click: apply   Shift: free spin   Esc: cancel'),
+                    const SizedBox(height: 8),
+                    OutlinedButton(
+                      onPressed: _cancelMirrorMode,
+                      child: const Text('Cancel'),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
       ],
@@ -293,8 +390,7 @@ class _SplitAutoEditorState extends State<SplitAutoEditor>
       num timeOffset = 0.0;
 
       try {
-        Pose2d startPose = Pose2d(
-            widget.autoPaths[0].pathPoints[0].position,
+        Pose2d startPose = Pose2d(widget.autoPaths[0].pathPoints[0].position,
             widget.autoPaths[0].idealStartingState.rotation);
         ChassisSpeeds startSpeeds = const ChassisSpeeds();
 
@@ -373,6 +469,271 @@ class _SplitAutoEditorState extends State<SplitAutoEditor>
       });
       _showGenerationFailedError();
     }
+  }
+
+  bool _handleKeyEvent(KeyEvent event) {
+    if (!_mirrorMode) {
+      return false;
+    }
+
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.escape) {
+      _cancelMirrorMode();
+      return true;
+    }
+
+    return false;
+  }
+
+  void _startMirrorMode() {
+    _viewerController.value = Matrix4.identity();
+
+    setState(() {
+      _mirrorModeCommandsCollapsedBefore = _commandsCollapsed;
+      _commandsCollapsed = true;
+      _mirrorMode = true;
+      _mirrorAxisAngleRad = pi / 2.0;
+    });
+  }
+
+  void _cancelMirrorMode() {
+    setState(() {
+      _mirrorMode = false;
+      _commandsCollapsed = _mirrorModeCommandsCollapsedBefore;
+    });
+  }
+
+  void _applyMirrorToAutoPaths() {
+    if (widget.auto.choreoAuto || widget.autoPaths.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No PathPlanner paths to mirror in auto')),
+      );
+      _cancelMirrorMode();
+      return;
+    }
+
+    final beforeAuto = widget.auto.duplicate(widget.auto.name);
+    final center = _fieldCenterMeters;
+    final renameMap = <String, String>{};
+    final createdMirroredPaths = <PathPlannerPath>[];
+    final existingNames = widget.allPaths.map((p) => p.name).toSet();
+
+    for (final sourcePath in widget.autoPaths) {
+      if (renameMap.containsKey(sourcePath.name)) {
+        continue;
+      }
+
+      final mirroredName =
+          _nextMirroredPathName(sourcePath.name, existingNames);
+      existingNames.add(mirroredName);
+
+      final mirrored = sourcePath.duplicate(mirroredName);
+      mirrorPathInPlace(mirrored, center, _mirrorAxisAngleRad);
+      mirrored.generateAndSavePath();
+
+      createdMirroredPaths.add(mirrored.duplicate(mirrored.name));
+      renameMap[sourcePath.name] = mirroredName;
+    }
+
+    setState(() {
+      for (final mirrored in createdMirroredPaths) {
+        final created = mirrored.duplicate(mirrored.name);
+        widget.allPaths.add(created);
+
+        if (!widget.allPathNames.contains(created.name)) {
+          widget.allPathNames.add(created.name);
+        }
+
+        created.saveFile();
+      }
+
+      for (final entry in renameMap.entries) {
+        widget.auto.updatePathName(entry.key, entry.value);
+      }
+
+      _rebuildAutoPathsFromCurrentAuto();
+      _simulateAuto();
+      _mirrorMode = false;
+      _commandsCollapsed = _mirrorModeCommandsCollapsedBefore;
+    });
+    widget.onAutoChanged?.call();
+
+    final createdPathNames = createdMirroredPaths.map((p) => p.name).toList();
+    widget.undoStack.add(Change(
+      beforeAuto,
+      () {
+        setState(() {
+          _restoreAutoFromSnapshot(beforeAuto);
+          _applyMirroredAutoRename(renameMap);
+          for (final mirrored in createdMirroredPaths) {
+            _upsertPathFromSnapshot(mirrored);
+          }
+          _rebuildAutoPathsFromCurrentAuto();
+          _simulateAuto();
+        });
+        widget.onAutoChanged?.call();
+      },
+      (oldValue) {
+        setState(() {
+          _restoreAutoFromSnapshot(oldValue);
+          for (final pathName in createdPathNames) {
+            _removePathByName(pathName);
+          }
+          _rebuildAutoPathsFromCurrentAuto();
+          _simulateAuto();
+        });
+        widget.onAutoChanged?.call();
+      },
+    ));
+  }
+
+  void _restoreAutoFromSnapshot(PathPlannerAuto snapshot) {
+    final restored = PathPlannerAuto.fromJson(
+      snapshot.toJson(),
+      widget.auto.name,
+      widget.auto.autoDir,
+      widget.auto.fs,
+    );
+
+    widget.auto.sequence = restored.sequence;
+    widget.auto.resetOdom = restored.resetOdom;
+    widget.auto.choreoAuto = restored.choreoAuto;
+    widget.auto.saveFile();
+  }
+
+  void _applyMirroredAutoRename(Map<String, String> renameMap) {
+    for (final entry in renameMap.entries) {
+      widget.auto.updatePathName(entry.key, entry.value);
+    }
+  }
+
+  void _rebuildAutoPathsFromCurrentAuto() {
+    widget.autoPaths
+      ..clear()
+      ..addAll(
+        widget.auto.getAllPathNames().map(
+            (name) => widget.allPaths.firstWhere((path) => path.name == name)),
+      );
+  }
+
+  String _nextMirroredPathName(String baseName, Set<String> existingNames) {
+    String candidate = '${baseName}-mirror';
+    int copyNum = 2;
+    while (existingNames.contains(candidate)) {
+      candidate = '${baseName}-mirror$copyNum';
+      copyNum++;
+    }
+    return candidate;
+  }
+
+  void _removePathByName(String pathName) {
+    final existing =
+        widget.allPaths.firstWhereOrNull((path) => path.name == pathName);
+    if (existing == null) {
+      return;
+    }
+
+    existing.deletePath();
+    widget.allPaths.remove(existing);
+    widget.allPathNames.remove(pathName);
+  }
+
+  void _upsertPathFromSnapshot(PathPlannerPath snapshot) {
+    final existing =
+        widget.allPaths.firstWhereOrNull((path) => path.name == snapshot.name);
+    if (existing != null) {
+      copyPathContents(existing, snapshot);
+    } else {
+      final created = snapshot.duplicate(snapshot.name);
+      widget.allPaths.add(created);
+      created.saveFile();
+    }
+
+    if (!widget.allPathNames.contains(snapshot.name)) {
+      widget.allPathNames.add(snapshot.name);
+    }
+  }
+
+  void _updateMirrorAxisFromLocal(Offset localPosition) {
+    final point = Translation2d(
+      _xPixelsToMeters(localPosition.dx),
+      _yPixelsToMeters(localPosition.dy),
+    );
+
+    final center = _fieldCenterMeters;
+    final dx = point.x - center.x;
+    final dy = point.y - center.y;
+    if ((dx * dx) + (dy * dy) < 1e-6) {
+      return;
+    }
+
+    double angle = atan2(dy, dx);
+    final shiftHeld = HardwareKeyboard.instance.logicalKeysPressed
+            .contains(LogicalKeyboardKey.shiftLeft) ||
+        HardwareKeyboard.instance.logicalKeysPressed
+            .contains(LogicalKeyboardKey.shiftRight);
+    if (!shiftHeld) {
+      const step = pi / 12.0;
+      angle = (angle / step).roundToDouble() * step;
+    }
+
+    if ((angle - _mirrorAxisAngleRad).abs() > 1e-6) {
+      setState(() {
+        _mirrorAxisAngleRad = angle;
+      });
+    }
+  }
+
+  Translation2d get _fieldCenterMeters {
+    final size = widget.fieldImage.getFieldSizeMeters();
+    return Translation2d(size.width / 2.0, size.height / 2.0);
+  }
+
+  String get _mirrorAxisDegLabel {
+    final deg = (_mirrorAxisAngleRad * 180.0 / pi);
+    final normalized = ((deg % 180) + 180) % 180;
+    return normalized.toStringAsFixed(1);
+  }
+
+  Offset get _mirrorAxisStartPx {
+    final center = _fieldCenterMeters;
+    final size = widget.fieldImage.getFieldSizeMeters();
+    final axis =
+        Translation2d(cos(_mirrorAxisAngleRad), sin(_mirrorAxisAngleRad));
+    final radius = max(size.width, size.height) * 2.0;
+    final point = center - (axis * radius);
+    return PathPainterUtil.pointToPixelOffset(
+      point,
+      PathPainter.scale,
+      widget.fieldImage,
+    );
+  }
+
+  Offset get _mirrorAxisEndPx {
+    final center = _fieldCenterMeters;
+    final size = widget.fieldImage.getFieldSizeMeters();
+    final axis =
+        Translation2d(cos(_mirrorAxisAngleRad), sin(_mirrorAxisAngleRad));
+    final radius = max(size.width, size.height) * 2.0;
+    final point = center + (axis * radius);
+    return PathPainterUtil.pointToPixelOffset(
+      point,
+      PathPainter.scale,
+      widget.fieldImage,
+    );
+  }
+
+  double _xPixelsToMeters(double pixels) {
+    return (((pixels - 48) / PathPainter.scale) /
+            widget.fieldImage.pixelsPerMeter) -
+        widget.fieldImage.marginMeters;
+  }
+
+  double _yPixelsToMeters(double pixels) {
+    return ((widget.fieldImage.defaultSize.height -
+                ((pixels - 48) / PathPainter.scale)) /
+            widget.fieldImage.pixelsPerMeter) -
+        widget.fieldImage.marginMeters;
   }
 
   Widget _buildResponsiveTreeScale(double maxWidth, Widget child) {
@@ -456,5 +817,40 @@ class _SplitAutoEditorState extends State<SplitAutoEditor>
     if (savePref) {
       widget.prefs.setString(PrefsKeys.editorLayoutPreset, preset);
     }
+  }
+}
+
+class _MirrorAxisPainter extends CustomPainter {
+  final Offset start;
+  final Offset end;
+  final Color color;
+
+  _MirrorAxisPainter({
+    required this.start,
+    required this.end,
+    required this.color,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final axisPaint = Paint()
+      ..color = color
+      ..strokeWidth = 2.5
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawLine(start, end, axisPaint);
+
+    final centerPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    final center = Offset((start.dx + end.dx) / 2.0, (start.dy + end.dy) / 2.0);
+    canvas.drawCircle(center, 4.0, centerPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _MirrorAxisPainter oldDelegate) {
+    return oldDelegate.start != start ||
+        oldDelegate.end != end ||
+        oldDelegate.color != color;
   }
 }
