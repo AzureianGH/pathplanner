@@ -383,10 +383,13 @@ void main() {
       ),
     ));
 
-    final removeButton = find.byTooltip('Remove Command');
-    expect(removeButton, findsOneWidget);
+    final actionsButton = find.byTooltip('Command Actions');
+    expect(actionsButton, findsOneWidget);
 
-    await widgetTester.tap(removeButton);
+    await widgetTester.tap(actionsButton);
+    await widgetTester.pumpAndSettle();
+
+    await widgetTester.tap(find.text('Delete').last);
     await widgetTester.pumpAndSettle();
 
     expect(path.eventMarkers[0].command, isNull);

@@ -5,8 +5,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pathplanner/auto/pathplanner_auto.dart';
 import 'package:pathplanner/path/choreo_path.dart';
 import 'package:pathplanner/trajectory/trajectory.dart';
+import 'package:pathplanner/trajectory/config.dart';
 import 'package:pathplanner/commands/command_groups.dart';
 import 'package:pathplanner/commands/path_command.dart';
+import 'package:pathplanner/commands/wait_command.dart';
 import 'package:pathplanner/path/event_marker.dart';
 import 'package:pathplanner/path/pathplanner_path.dart';
 import 'package:pathplanner/path/rotation_target.dart';
@@ -77,6 +79,7 @@ void main() {
         body: SplitAutoEditor(
           prefs: prefs,
           auto: auto,
+          allPaths: [testPath],
           autoPaths: [testPath],
           autoChoreoPaths: [
             ChoreoPath(
@@ -119,6 +122,7 @@ void main() {
         body: SplitAutoEditor(
           prefs: prefs,
           auto: auto,
+          allPaths: [testPath],
           autoPaths: [testPath],
           autoChoreoPaths: const [],
           allPathNames: const ['testPath', 'otherPath'],
@@ -128,6 +132,7 @@ void main() {
         ),
       ),
     ));
+    await widgetTester.pump(const Duration(milliseconds: 200));
 
     final gesture =
         await widgetTester.createGesture(kind: PointerDeviceKind.mouse);
@@ -135,6 +140,10 @@ void main() {
     addTearDown(gesture.removePointer);
 
     expect(find.byType(PathCommandWidget), findsOneWidget);
+    expect(
+      widgetTester.widget<PathCommandWidget>(find.byType(PathCommandWidget)).highlighted,
+      true,
+    );
 
     await gesture
         .moveTo(widgetTester.getCenter(find.byType(PathCommandWidget)));
@@ -142,6 +151,140 @@ void main() {
 
     await gesture.moveTo(Offset.infinite);
     await widgetTester.pump();
+  });
+
+  testWidgets('command delays affect simulated runtime', (widgetTester) async {
+    await widgetTester.binding.setSurfaceSize(const Size(1280, 720));
+
+    Future<num> pumpAndReadRuntime() async {
+      await widgetTester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SplitAutoEditor(
+            key: UniqueKey(),
+            prefs: prefs,
+            auto: auto,
+            allPaths: [testPath],
+            autoPaths: [testPath],
+            autoChoreoPaths: const [],
+            allPathNames: const ['testPath', 'otherPath'],
+            fieldImage: FieldImage.official(OfficialField.crescendo),
+            undoStack: undoStack,
+            onAutoChanged: () {},
+          ),
+        ),
+      ));
+      await widgetTester.pump(const Duration(milliseconds: 200));
+
+      final runtimeText = widgetTester
+          .widget<Text>(find.textContaining('Simulated Driving Time: ~'))
+          .data!;
+      final runtimeString = RegExp(r'~([0-9]+\.[0-9]+)s')
+          .firstMatch(runtimeText)!
+          .group(1)!;
+      return num.parse(runtimeString);
+    }
+
+    final baselineRuntime = await pumpAndReadRuntime();
+
+    final delayedCommand = auto.sequence.commands.first as PathCommand;
+    delayedCommand.beforeDelay = 1.25;
+    delayedCommand.afterDelay = 1.75;
+
+    final delayedRuntime = await pumpAndReadRuntime();
+
+    expect(delayedRuntime - baselineRuntime, greaterThan(2.8));
+  });
+
+  testWidgets('delay to path transition stays on path', (widgetTester) async {
+    await widgetTester.binding.setSurfaceSize(const Size(1280, 720));
+
+    final delayedCommand = auto.sequence.commands.first as PathCommand;
+    delayedCommand.beforeDelay = 1.0;
+
+    await widgetTester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SplitAutoEditor(
+          key: UniqueKey(),
+          prefs: prefs,
+          auto: auto,
+          allPaths: [testPath],
+          autoPaths: [testPath],
+          autoChoreoPaths: const [],
+          allPathNames: const ['testPath', 'otherPath'],
+          fieldImage: FieldImage.official(OfficialField.crescendo),
+          undoStack: undoStack,
+          onAutoChanged: () {},
+        ),
+      ),
+    ));
+    await widgetTester.pump(const Duration(milliseconds: 200));
+
+    final pathPainter = widgetTester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .map((widget) => widget.painter)
+        .whereType<PathPainter>()
+        .firstWhere((painter) => painter.simulatedPath != null);
+
+    final delayedSample = pathPainter.simulatedPath!.sample(1.05);
+    final baselineTrajectory = PathPlannerTrajectory(
+      path: testPath,
+      robotConfig: RobotConfig.fromPrefs(prefs),
+    );
+    final baselineSample = baselineTrajectory.sample(0.05);
+
+    expect(
+      delayedSample.pose.translation.getDistance(baselineSample.pose.translation),
+      lessThan(0.15),
+    );
+  });
+
+  testWidgets('wait in parallel group affects simulated runtime',
+      (widgetTester) async {
+    await widgetTester.binding.setSurfaceSize(const Size(1280, 720));
+
+    auto.sequence = SequentialCommandGroup(commands: [
+      ParallelCommandGroup(commands: [
+        PathCommand(pathName: 'testPath'),
+        WaitCommand(waitTime: 5.0),
+      ]),
+    ]);
+
+    Future<num> pumpAndReadRuntime() async {
+      await widgetTester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SplitAutoEditor(
+            key: UniqueKey(),
+            prefs: prefs,
+            auto: auto,
+            allPaths: [testPath],
+            autoPaths: [testPath],
+            autoChoreoPaths: const [],
+            allPathNames: const ['testPath', 'otherPath'],
+            fieldImage: FieldImage.official(OfficialField.crescendo),
+            undoStack: undoStack,
+            onAutoChanged: () {},
+          ),
+        ),
+      ));
+      await widgetTester.pump(const Duration(milliseconds: 200));
+
+      final runtimeText = widgetTester
+          .widget<Text>(find.textContaining('Simulated Driving Time: ~'))
+          .data!;
+      final runtimeString = RegExp(r'~([0-9]+\.[0-9]+)s')
+          .firstMatch(runtimeText)!
+          .group(1)!;
+      return num.parse(runtimeString);
+    }
+
+    final groupedRuntime = await pumpAndReadRuntime();
+
+    auto.sequence = SequentialCommandGroup(commands: [
+      PathCommand(pathName: 'testPath'),
+    ]);
+    final baselineRuntime = await pumpAndReadRuntime();
+
+    expect(groupedRuntime - baselineRuntime, greaterThan(3.0));
   });
 
   testWidgets('swap tree side', (widgetTester) async {
@@ -152,6 +295,7 @@ void main() {
         body: SplitAutoEditor(
           prefs: prefs,
           auto: auto,
+          allPaths: [testPath],
           autoPaths: [testPath],
           autoChoreoPaths: const [],
           allPathNames: const ['testPath', 'otherPath'],
@@ -185,6 +329,7 @@ void main() {
         body: SplitAutoEditor(
           prefs: prefs,
           auto: auto,
+          allPaths: [testPath],
           autoPaths: [testPath],
           autoChoreoPaths: const [],
           allPathNames: const ['testPath', 'otherPath'],

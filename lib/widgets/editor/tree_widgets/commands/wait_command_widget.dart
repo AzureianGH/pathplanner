@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:pathplanner/commands/wait_command.dart';
-import 'package:pathplanner/widgets/editor/tree_widgets/commands/duplicate_command_button.dart';
+import 'package:pathplanner/widgets/editor/tree_widgets/commands/command_actions_button.dart';
+import 'package:pathplanner/widgets/editor/tree_widgets/commands/command_preview_state.dart';
 import 'package:pathplanner/widgets/number_text_field.dart';
 import 'package:undo/undo.dart';
 
@@ -10,6 +11,8 @@ class WaitCommandWidget extends StatelessWidget {
   final VoidCallback? onRemoved;
   final ChangeStack undoStack;
   final VoidCallback? onDuplicateCommand;
+  final bool highlighted;
+  final CommandPreviewState? previewState;
 
   const WaitCommandWidget({
     super.key,
@@ -18,6 +21,8 @@ class WaitCommandWidget extends StatelessWidget {
     this.onRemoved,
     required this.undoStack,
     this.onDuplicateCommand,
+    this.highlighted = false,
+    this.previewState,
   });
 
   void _updateWaitTime(num newValue) {
@@ -38,10 +43,19 @@ class WaitCommandWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    ColorScheme colorScheme = Theme.of(context).colorScheme;
-
     return Row(
       children: [
+        if (highlighted)
+          const Padding(
+            padding: EdgeInsets.only(right: 8),
+            child: Icon(Icons.play_arrow, color: Colors.pinkAccent, size: 18),
+          ),
+        CommandDelayStatus(
+          command: command,
+          previewState: previewState,
+          activeColor: Colors.pinkAccent,
+        ),
+        if (command.hasExecutionDelays) const SizedBox(width: 8),
         const SizedBox(width: 8),
         Expanded(
           child: NumberTextField(
@@ -57,18 +71,14 @@ class WaitCommandWidget extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 12),
-        DuplicateCommandButton(
-          onPressed: onDuplicateCommand,
-        ),
-        Tooltip(
-          message: 'Remove Command',
-          waitDuration: const Duration(milliseconds: 500),
-          child: IconButton(
-            onPressed: onRemoved,
-            visualDensity: const VisualDensity(
-                horizontal: VisualDensity.minimumDensity,
-                vertical: VisualDensity.minimumDensity),
-            icon: Icon(Icons.delete, color: colorScheme.error),
+        CommandActionsButton(
+          onDuplicate: onDuplicateCommand,
+          onRemove: onRemoved,
+          onEditDelays: () => showCommandDelaysDialog(
+            context: context,
+            command: command,
+            undoStack: undoStack,
+            onUpdated: onUpdated,
           ),
         ),
       ],

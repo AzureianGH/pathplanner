@@ -16,12 +16,17 @@ void main() {
   });
 
   test('toJson/fromJson interoperability', () {
-    NamedCommand cmd = NamedCommand(name: 'test');
+    NamedCommand cmd = NamedCommand(
+      name: 'test',
+      beforeDelay: 0.2,
+      afterDelay: 0.4,
+    );
 
     Map<String, dynamic> json = cmd.toJson();
     Command fromJson = Command.fromJson(json)!;
 
     expect(fromJson, cmd);
+    expect(json['type'], 'sequential');
   });
 
   test('proper cloning', () {

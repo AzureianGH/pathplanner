@@ -4,7 +4,12 @@ import 'package:pathplanner/commands/command.dart';
 abstract class CommandGroup extends Command {
   List<Command> commands;
 
-  CommandGroup({required super.type, required this.commands});
+  CommandGroup({
+    required super.type,
+    required this.commands,
+    super.beforeDelay,
+    super.afterDelay,
+  });
 
   CommandGroup.fromDataJson(Map<String, dynamic> json, {required super.type})
       : commands = [] {
@@ -22,6 +27,8 @@ abstract class CommandGroup extends Command {
       'commands': [
         for (Command command in commands) command.toJson(),
       ],
+      'beforeDelay': beforeDelay,
+      'afterDelay': afterDelay,
     };
   }
 
@@ -40,18 +47,21 @@ class SequentialCommandGroup extends CommandGroup {
 
   @override
   Command clone() {
-    return SequentialCommandGroup(
-        commands: CommandGroup.cloneCommandsList(commands));
+    return copyBaseValuesTo(
+      SequentialCommandGroup(commands: CommandGroup.cloneCommandsList(commands)),
+    );
   }
 
   @override
   bool operator ==(Object other) =>
       other is SequentialCommandGroup &&
       other.runtimeType == runtimeType &&
+      other.beforeDelay == beforeDelay &&
+      other.afterDelay == afterDelay &&
       listEquals(other.commands, commands);
 
   @override
-  int get hashCode => Object.hash(type, commands);
+    int get hashCode => Object.hash(type, commands, beforeDelay, afterDelay);
 }
 
 class ParallelCommandGroup extends CommandGroup {
@@ -62,18 +72,21 @@ class ParallelCommandGroup extends CommandGroup {
 
   @override
   Command clone() {
-    return ParallelCommandGroup(
-        commands: CommandGroup.cloneCommandsList(commands));
+    return copyBaseValuesTo(
+      ParallelCommandGroup(commands: CommandGroup.cloneCommandsList(commands)),
+    );
   }
 
   @override
   bool operator ==(Object other) =>
       other is ParallelCommandGroup &&
       other.runtimeType == runtimeType &&
+      other.beforeDelay == beforeDelay &&
+      other.afterDelay == afterDelay &&
       listEquals(other.commands, commands);
 
   @override
-  int get hashCode => Object.hash(type, commands);
+    int get hashCode => Object.hash(type, commands, beforeDelay, afterDelay);
 }
 
 class RaceCommandGroup extends CommandGroup {
@@ -83,17 +96,21 @@ class RaceCommandGroup extends CommandGroup {
 
   @override
   Command clone() {
-    return RaceCommandGroup(commands: CommandGroup.cloneCommandsList(commands));
+    return copyBaseValuesTo(
+      RaceCommandGroup(commands: CommandGroup.cloneCommandsList(commands)),
+    );
   }
 
   @override
   bool operator ==(Object other) =>
       other is RaceCommandGroup &&
       other.runtimeType == runtimeType &&
+      other.beforeDelay == beforeDelay &&
+      other.afterDelay == afterDelay &&
       listEquals(other.commands, commands);
 
   @override
-  int get hashCode => Object.hash(type, commands);
+    int get hashCode => Object.hash(type, commands, beforeDelay, afterDelay);
 }
 
 class DeadlineCommandGroup extends CommandGroup {
@@ -104,16 +121,19 @@ class DeadlineCommandGroup extends CommandGroup {
 
   @override
   Command clone() {
-    return DeadlineCommandGroup(
-        commands: CommandGroup.cloneCommandsList(commands));
+    return copyBaseValuesTo(
+      DeadlineCommandGroup(commands: CommandGroup.cloneCommandsList(commands)),
+    );
   }
 
   @override
   bool operator ==(Object other) =>
       other is DeadlineCommandGroup &&
       other.runtimeType == runtimeType &&
+      other.beforeDelay == beforeDelay &&
+      other.afterDelay == afterDelay &&
       listEquals(other.commands, commands);
 
   @override
-  int get hashCode => Object.hash(type, commands);
+    int get hashCode => Object.hash(type, commands, beforeDelay, afterDelay);
 }

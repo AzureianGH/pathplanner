@@ -2,6 +2,7 @@ import 'package:dropdown_button2/dropdown_button2.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pathplanner/commands/path_command.dart';
+import 'package:pathplanner/widgets/editor/tree_widgets/commands/command_preview_state.dart';
 import 'package:pathplanner/widgets/editor/tree_widgets/commands/path_command_widget.dart';
 import 'package:undo/undo.dart';
 
@@ -58,13 +59,36 @@ void main() {
       ),
     ));
 
-    final removeButton = find.byTooltip('Remove Command');
+    final actionsButton = find.byTooltip('Command Actions');
 
-    expect(removeButton, findsOneWidget);
+    expect(actionsButton, findsOneWidget);
 
-    await widgetTester.tap(removeButton);
+    await widgetTester.tap(actionsButton);
+    await widgetTester.pumpAndSettle();
+    await widgetTester.tap(find.text('Delete'));
     await widgetTester.pump();
 
     expect(removed, true);
+  });
+
+  testWidgets('shows active delay countdown', (widgetTester) async {
+    cmd.beforeDelay = 1.0;
+
+    await widgetTester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: PathCommandWidget(
+          command: cmd,
+          allPathNames: const ['path1'],
+          undoStack: undoStack,
+          previewState: CommandPreviewState(
+            command: cmd,
+            phase: CommandPreviewPhase.beforeDelay,
+            remainingTime: 0.94,
+          ),
+        ),
+      ),
+    ));
+
+    expect(find.text('1.0s'), findsOneWidget);
   });
 }

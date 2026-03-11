@@ -8,7 +8,7 @@ void main() {
     EventMarker m = EventMarker(
       name: 'test',
       waypointRelativePos: 1.0,
-      command: null,
+      command: WaitCommand(beforeDelay: 0.2, waitTime: 0.5, afterDelay: 0.3),
     );
 
     Map<String, dynamic> json = m.toJson();

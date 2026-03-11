@@ -6,7 +6,8 @@ import 'package:pathplanner/commands/path_command.dart';
 import 'package:pathplanner/commands/wait_command.dart';
 import 'package:pathplanner/widgets/conditional_widget.dart';
 import 'package:pathplanner/widgets/editor/tree_widgets/commands/add_command_button.dart';
-import 'package:pathplanner/widgets/editor/tree_widgets/commands/duplicate_command_button.dart';
+import 'package:pathplanner/widgets/editor/tree_widgets/commands/command_actions_button.dart';
+import 'package:pathplanner/widgets/editor/tree_widgets/commands/command_preview_state.dart';
 import 'package:pathplanner/widgets/editor/tree_widgets/commands/named_command_widget.dart';
 import 'package:pathplanner/widgets/editor/tree_widgets/commands/path_command_widget.dart';
 import 'package:pathplanner/widgets/editor/tree_widgets/commands/wait_command_widget.dart';
@@ -25,6 +26,8 @@ class _RemovedCommandLocation {
 }
 
 class CommandGroupWidget extends StatelessWidget {
+  static const Color _activeCommandColor = Colors.pinkAccent;
+
   final CommandGroup command;
   final CommandGroup rootGroup;
   final VoidCallback? onUpdated;
@@ -37,6 +40,7 @@ class CommandGroupWidget extends StatelessWidget {
   final VoidCallback? onDuplicateCommand;
   final bool showEditPathButton;
   final Function(String?)? onEditPathPressed;
+  final CommandPreviewState? previewState;
   final ValueNotifier<Offset?> _groupPromptOffset = ValueNotifier(null);
 
   CommandGroupWidget({
@@ -53,11 +57,14 @@ class CommandGroupWidget extends StatelessWidget {
     this.onDuplicateCommand,
     this.showEditPathButton = true,
     this.onEditPathPressed,
+    this.previewState,
   });
 
   @override
   Widget build(BuildContext context) {
     ColorScheme colorScheme = Theme.of(context).colorScheme;
+    final isActive = _containsActiveCommand(command);
+    final textColor = isActive ? _activeCommandColor : colorScheme.onSurface;
 
     String type =
         '${command.type[0].toUpperCase()}${command.type.substring(1)}';
@@ -89,8 +96,22 @@ class CommandGroupWidget extends StatelessWidget {
                       color: Colors.transparent,
                       child: ConditionalWidget(
                         condition: onGroupTypeChanged != null,
-                        falseChild: Text('$type Group',
-                            style: const TextStyle(fontSize: 16)),
+                        falseChild: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            CommandDelayStatus(
+                              command: command,
+                              previewState: previewState,
+                              activeColor: _activeCommandColor,
+                            ),
+                            if (command.hasExecutionDelays)
+                              const SizedBox(width: 6),
+                            Text(
+                              '$type Group',
+                              style: TextStyle(fontSize: 16, color: textColor),
+                            ),
+                          ],
+                        ),
                         trueChild: PopupMenuButton(
                           initialValue: command.type,
                           tooltip: '',
@@ -122,9 +143,18 @@ class CommandGroupWidget extends StatelessWidget {
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Text('$type Group',
-                                    style: const TextStyle(fontSize: 16)),
-                                const Icon(Icons.arrow_drop_down),
+                                CommandDelayStatus(
+                                  command: command,
+                                  previewState: previewState,
+                                  activeColor: _activeCommandColor,
+                                ),
+                                if (command.hasExecutionDelays)
+                                  const SizedBox(width: 6),
+                                Text(
+                                  '$type Group',
+                                  style: TextStyle(fontSize: 16, color: textColor),
+                                ),
+                                Icon(Icons.arrow_drop_down, color: textColor),
                               ],
                             ),
                           ),
@@ -153,23 +183,14 @@ class CommandGroupWidget extends StatelessWidget {
                       ));
                     },
                   ),
-                  Visibility(
-                      visible: onDuplicateCommand != null,
-                      child: DuplicateCommandButton(
-                        onPressed: onDuplicateCommand,
-                      )),
-                  Visibility(
-                    visible: onRemoved != null,
-                    child: Tooltip(
-                      message: 'Remove Command',
-                      waitDuration: const Duration(seconds: 1),
-                      child: IconButton(
-                        onPressed: onRemoved,
-                        visualDensity: const VisualDensity(
-                            horizontal: VisualDensity.minimumDensity,
-                            vertical: VisualDensity.minimumDensity),
-                        icon: Icon(Icons.delete, color: colorScheme.error),
-                      ),
+                  CommandActionsButton(
+                    onDuplicate: onDuplicateCommand,
+                    onRemove: onRemoved,
+                    onEditDelays: () => showCommandDelaysDialog(
+                      context: context,
+                      command: command,
+                      undoStack: undoStack,
+                      onUpdated: onUpdated,
                     ),
                   ),
                 ],
@@ -201,33 +222,25 @@ class CommandGroupWidget extends StatelessWidget {
                       onEnter: (event) => onPathCommandHovered
                           ?.call((command.commands[index] as PathCommand).pathName),
                       onExit: (event) => onPathCommandHovered?.call(null),
-                      child: Card(
-                        elevation: subCommandElevation,
-                        color: colorScheme.primaryContainer,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 16.0),
-                          child: Row(
-                            children: [
-                              _buildDragHandle(context, command.commands[index]),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: PathCommandWidget(
-                                  command: command.commands[index] as PathCommand,
-                                  allPathNames: allPathNames ?? [],
-                                  onUpdated: onUpdated,
-                                  onRemoved: () {
-                                    onPathCommandHovered?.call(null);
-                                    _removeCommand(index);
-                                  },
-                                  undoStack: undoStack,
-                                  onDuplicateCommand: () => _duplicateCommand(index),
-                                  showEditButton: showEditPathButton,
-                                  onEditPathPressed: onEditPathPressed,
-                                ),
-                              ),
-                            ],
-                          ),
+                      child: _buildCommandCard(
+                        context: context,
+                        commandEntry: command.commands[index],
+                        baseColor: colorScheme.primaryContainer,
+                        child: PathCommandWidget(
+                          command: command.commands[index] as PathCommand,
+                          allPathNames: allPathNames ?? [],
+                          onUpdated: onUpdated,
+                          onRemoved: () {
+                            onPathCommandHovered?.call(null);
+                            _removeCommand(index);
+                          },
+                          undoStack: undoStack,
+                          onDuplicateCommand: () => _duplicateCommand(index),
+                          showEditButton: showEditPathButton,
+                          onEditPathPressed: onEditPathPressed,
+                          highlighted: identical(
+                              previewState?.command, command.commands[index]),
+                          previewState: previewState,
                         ),
                       ),
                     ),
@@ -236,21 +249,11 @@ class CommandGroupWidget extends StatelessWidget {
                   _buildGroupCreationTarget(
                     context: context,
                     targetCommand: command.commands[index],
-                    child: Card(
-                      elevation: subCommandElevation,
-                      color: colorScheme.surface,
-                      surfaceTintColor: colorScheme.surfaceTint,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 16.0),
-                        child: Row(
-                          children: [
-                            _buildDragHandle(context, command.commands[index]),
-                            const SizedBox(width: 8),
-                            Expanded(child: _buildSubCommand(index)),
-                          ],
-                        ),
-                      ),
+                    child: _buildCommandCard(
+                      context: context,
+                      commandEntry: command.commands[index],
+                      baseColor: colorScheme.surface,
+                      child: _buildSubCommand(index),
                     ),
                   ),
               ],
@@ -258,6 +261,38 @@ class CommandGroupWidget extends StatelessWidget {
           ),
         _buildInsertTarget(context, command.commands.length),
       ],
+    );
+  }
+
+  Widget _buildCommandCard({
+    required BuildContext context,
+    required Command commandEntry,
+    required Color baseColor,
+    required Widget child,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final isActive = _containsActiveCommand(commandEntry);
+
+    return Card(
+      elevation: isActive ? subCommandElevation + 1.5 : subCommandElevation,
+      color: isActive ? _activeCommandColor.withAlpha(55) : baseColor,
+      surfaceTintColor: colorScheme.surfaceTint,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: isActive
+            ? const BorderSide(color: _activeCommandColor, width: 1.5)
+            : BorderSide.none,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 16.0),
+        child: Row(
+          children: [
+            _buildDragHandle(context, commandEntry),
+            const SizedBox(width: 8),
+            Expanded(child: child),
+          ],
+        ),
+      ),
     );
   }
 
@@ -425,6 +460,8 @@ class CommandGroupWidget extends StatelessWidget {
         onRemoved: () => _removeCommand(cmdIndex),
         undoStack: undoStack,
         onDuplicateCommand: () => _duplicateCommand(cmdIndex),
+        highlighted: identical(previewState?.command, command.commands[cmdIndex]),
+        previewState: previewState,
       );
     } else if (command.commands[cmdIndex] is WaitCommand) {
       return WaitCommandWidget(
@@ -433,6 +470,8 @@ class CommandGroupWidget extends StatelessWidget {
         onRemoved: () => _removeCommand(cmdIndex),
         undoStack: undoStack,
         onDuplicateCommand: () => _duplicateCommand(cmdIndex),
+        highlighted: identical(previewState?.command, command.commands[cmdIndex]),
+        previewState: previewState,
       );
     } else if (command.commands[cmdIndex] is CommandGroup) {
       return CommandGroupWidget(
@@ -446,6 +485,7 @@ class CommandGroupWidget extends StatelessWidget {
         onPathCommandHovered: onPathCommandHovered,
         showEditPathButton: showEditPathButton,
         onEditPathPressed: onEditPathPressed,
+        previewState: previewState,
         onGroupTypeChanged: (value) {
           undoStack.add(Change(
             command.commands[cmdIndex].type,
@@ -474,6 +514,27 @@ class CommandGroupWidget extends StatelessWidget {
     }
 
     return Container();
+  }
+
+  bool _containsActiveCommand(Command current) {
+    final activeCommand = previewState?.command;
+    if (activeCommand == null) {
+      return false;
+    }
+    if (identical(current, activeCommand)) {
+      return true;
+    }
+    if (current is! CommandGroup) {
+      return false;
+    }
+
+    for (final child in current.commands) {
+      if (_containsActiveCommand(child)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   Widget _buildCommandDragFeedback(BuildContext context, Command dragged) {

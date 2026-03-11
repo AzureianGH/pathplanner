@@ -16,12 +16,17 @@ void main() {
   });
 
   test('toJson/fromJson interoperability', () {
-    WaitCommand wait = WaitCommand(waitTime: 1.5);
+    WaitCommand wait = WaitCommand(
+      waitTime: 1.5,
+      beforeDelay: 0.25,
+      afterDelay: 0.5,
+    );
 
     Map<String, dynamic> json = wait.toJson();
     Command fromJson = Command.fromJson(json)!;
 
     expect(fromJson, wait);
+    expect(json['type'], 'sequential');
   });
 
   test('proper cloning', () {

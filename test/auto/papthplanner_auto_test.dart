@@ -61,8 +61,10 @@ void main() {
         name: 'test',
         autoDir: '/autos',
         fs: fs,
-        sequence:
-            SequentialCommandGroup(commands: [WaitCommand(waitTime: 1.0)]),
+          sequence: SequentialCommandGroup(commands: [
+            WaitCommand(waitTime: 1.0),
+            NamedCommand(name: 'event', beforeDelay: 0.2, afterDelay: 0.4),
+          ]),
         resetOdom: true,
         folder: null,
         choreoAuto: false,
@@ -73,6 +75,10 @@ void main() {
           PathPlannerAuto.fromJson(json, auto.name, '/autos', fs);
 
       expect(fromJson, auto);
+      expect(
+        ((json['command'] as Map<String, dynamic>)['data'] as Map<String, dynamic>)['commands'],
+        isNotEmpty,
+      );
     });
 
     test('duplication', () {

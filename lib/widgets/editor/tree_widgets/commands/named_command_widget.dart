@@ -2,7 +2,8 @@ import 'package:dropdown_button2/dropdown_button2.dart';
 import 'package:flutter/material.dart';
 import 'package:pathplanner/commands/named_command.dart';
 import 'package:pathplanner/pages/project/project_page.dart';
-import 'package:pathplanner/widgets/editor/tree_widgets/commands/duplicate_command_button.dart';
+import 'package:pathplanner/widgets/editor/tree_widgets/commands/command_actions_button.dart';
+import 'package:pathplanner/widgets/editor/tree_widgets/commands/command_preview_state.dart';
 import 'package:undo/undo.dart';
 
 class NamedCommandWidget extends StatefulWidget {
@@ -11,6 +12,8 @@ class NamedCommandWidget extends StatefulWidget {
   final VoidCallback? onRemoved;
   final ChangeStack undoStack;
   final VoidCallback? onDuplicateCommand;
+  final bool highlighted;
+  final CommandPreviewState? previewState;
 
   const NamedCommandWidget({
     super.key,
@@ -19,6 +22,8 @@ class NamedCommandWidget extends StatefulWidget {
     this.onRemoved,
     required this.undoStack,
     this.onDuplicateCommand,
+    this.highlighted = false,
+    this.previewState,
   });
 
   @override
@@ -26,6 +31,8 @@ class NamedCommandWidget extends StatefulWidget {
 }
 
 class _NamedCommandWidgetState extends State<NamedCommandWidget> {
+  static const Color _activeCommandColor = Colors.pinkAccent;
+
   final TextEditingController _controller = TextEditingController();
   final FocusNode _focusNode = FocusNode();
 
@@ -44,6 +51,12 @@ class _NamedCommandWidgetState extends State<NamedCommandWidget> {
       children: [
         Row(
           children: [
+            CommandDelayStatus(
+              command: widget.command,
+              previewState: widget.previewState,
+              activeColor: _activeCommandColor,
+            ),
+            if (widget.command.hasExecutionDelays) const SizedBox(width: 8),
             Expanded(
               child: DropdownButtonHideUnderline(
                 child: DropdownButton2<String>(
@@ -59,7 +72,9 @@ class _NamedCommandWidgetState extends State<NamedCommandWidget> {
                               '',
                               style: TextStyle(
                                 fontWeight: FontWeight.normal,
-                                color: colorScheme.onSurface,
+                                color: widget.highlighted
+                                    ? _activeCommandColor
+                                    : colorScheme.onSurface,
                               ),
                             ),
                           ),
@@ -73,7 +88,9 @@ class _NamedCommandWidgetState extends State<NamedCommandWidget> {
                                   event,
                                   style: TextStyle(
                                     fontWeight: FontWeight.normal,
-                                    color: colorScheme.onSurface,
+                                    color: widget.highlighted
+                                        ? _activeCommandColor
+                                        : colorScheme.onSurface,
                                   ),
                                 ),
                               ),
@@ -83,7 +100,9 @@ class _NamedCommandWidgetState extends State<NamedCommandWidget> {
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
-                        color: colorScheme.onSurface,
+                        color: widget.highlighted
+                            ? _activeCommandColor
+                            : colorScheme.onSurface,
                       ),
                     ),
                     height: 42,
@@ -184,21 +203,14 @@ class _NamedCommandWidgetState extends State<NamedCommandWidget> {
                 ),
               ),
             ),
-            Visibility(
-              visible: widget.onDuplicateCommand != null,
-              child: DuplicateCommandButton(
-                onPressed: widget.onDuplicateCommand,
-              ),
-            ),
-            Tooltip(
-              message: 'Remove Command',
-              waitDuration: const Duration(milliseconds: 500),
-              child: IconButton(
-                onPressed: widget.onRemoved,
-                visualDensity: const VisualDensity(
-                    horizontal: VisualDensity.minimumDensity,
-                    vertical: VisualDensity.minimumDensity),
-                icon: Icon(Icons.delete, color: colorScheme.error),
+            CommandActionsButton(
+              onDuplicate: widget.onDuplicateCommand,
+              onRemove: widget.onRemoved,
+              onEditDelays: () => showCommandDelaysDialog(
+                context: context,
+                command: widget.command,
+                undoStack: widget.undoStack,
+                onUpdated: widget.onUpdated,
               ),
             ),
           ],

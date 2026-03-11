@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:pathplanner/auto/pathplanner_auto.dart';
 import 'package:pathplanner/widgets/editor/tree_widgets/commands/command_group_widget.dart';
+import 'package:pathplanner/widgets/editor/tree_widgets/commands/command_preview_state.dart';
 import 'package:pathplanner/widgets/editor/tree_widgets/editor_settings_tree.dart';
 import 'package:pathplanner/widgets/editor/tree_widgets/reset_odom_tree.dart';
 import 'package:undo/undo.dart';
@@ -17,6 +18,7 @@ class AutoTree extends StatefulWidget {
   final VoidCallback? onRenderAuto;
   final VoidCallback? onCollapseRequested;
   final VoidCallback? onMirrorRequested;
+  final CommandPreviewState? previewState;
 
   const AutoTree({
     super.key,
@@ -31,6 +33,7 @@ class AutoTree extends StatefulWidget {
     this.onRenderAuto,
     this.onCollapseRequested,
     this.onMirrorRequested,
+    this.previewState,
   });
 
   @override
@@ -128,6 +131,7 @@ class _AutoTreeState extends State<AutoTree> {
                                   undoStack: widget.undoStack,
                                   showEditPathButton: !widget.auto.choreoAuto,
                                   onEditPathPressed: widget.onEditPathPressed,
+                                  previewState: widget.previewState,
                                 ),
                               ),
                             ),

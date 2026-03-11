@@ -1,8 +1,9 @@
 import 'package:dropdown_button2/dropdown_button2.dart';
 import 'package:flutter/material.dart';
 import 'package:pathplanner/commands/path_command.dart';
+import 'package:pathplanner/widgets/editor/tree_widgets/commands/command_preview_state.dart';
 import 'package:pathplanner/widgets/conditional_widget.dart';
-import 'package:pathplanner/widgets/editor/tree_widgets/commands/duplicate_command_button.dart';
+import 'package:pathplanner/widgets/editor/tree_widgets/commands/command_actions_button.dart';
 import 'package:undo/undo.dart';
 
 class PathCommandWidget extends StatefulWidget {
@@ -14,6 +15,8 @@ class PathCommandWidget extends StatefulWidget {
   final VoidCallback? onDuplicateCommand;
   final Function(String?)? onEditPathPressed;
   final bool showEditButton;
+  final bool highlighted;
+  final CommandPreviewState? previewState;
 
   const PathCommandWidget({
     super.key,
@@ -25,6 +28,8 @@ class PathCommandWidget extends StatefulWidget {
     this.onDuplicateCommand,
     this.onEditPathPressed,
     this.showEditButton = true,
+    this.highlighted = false,
+    this.previewState,
   });
 
   @override
@@ -32,6 +37,8 @@ class PathCommandWidget extends StatefulWidget {
 }
 
 class _PathCommandWidgetState extends State<PathCommandWidget> {
+  static const Color _activeCommandColor = Colors.pinkAccent;
+
   final TextEditingController _controller = TextEditingController();
   final FocusNode _focusNode = FocusNode();
 
@@ -45,9 +52,18 @@ class _PathCommandWidgetState extends State<PathCommandWidget> {
   @override
   Widget build(BuildContext context) {
     ColorScheme colorScheme = Theme.of(context).colorScheme;
+    final borderColor = widget.highlighted
+      ? _activeCommandColor
+        : colorScheme.onPrimaryContainer;
 
     return Row(
       children: [
+        CommandDelayStatus(
+          command: widget.command,
+          previewState: widget.previewState,
+          activeColor: _activeCommandColor,
+        ),
+        if (widget.command.hasExecutionDelays) const SizedBox(width: 8),
         Expanded(
           child: DropdownButtonHideUnderline(
             child: DropdownButton2<String>(
@@ -64,7 +80,9 @@ class _PathCommandWidgetState extends State<PathCommandWidget> {
                       widget.allPathNames[index],
                       style: TextStyle(
                         fontWeight: FontWeight.normal,
-                        color: colorScheme.onPrimaryContainer,
+                        color: widget.highlighted
+                          ? _activeCommandColor
+                            : colorScheme.onPrimaryContainer,
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -76,7 +94,7 @@ class _PathCommandWidgetState extends State<PathCommandWidget> {
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(
-                    color: colorScheme.onPrimaryContainer,
+                        color: borderColor,
                   ),
                 ),
                 height: 42,
@@ -180,18 +198,14 @@ class _PathCommandWidgetState extends State<PathCommandWidget> {
             ),
           ),
         ),
-        DuplicateCommandButton(
-          onPressed: widget.onDuplicateCommand,
-        ),
-        Tooltip(
-          message: 'Remove Command',
-          waitDuration: const Duration(milliseconds: 500),
-          child: IconButton(
-            onPressed: widget.onRemoved,
-            visualDensity: const VisualDensity(
-                horizontal: VisualDensity.minimumDensity,
-                vertical: VisualDensity.minimumDensity),
-            icon: Icon(Icons.delete, color: colorScheme.error),
+        CommandActionsButton(
+          onDuplicate: widget.onDuplicateCommand,
+          onRemove: widget.onRemoved,
+          onEditDelays: () => showCommandDelaysDialog(
+            context: context,
+            command: widget.command,
+            undoStack: widget.undoStack,
+            onUpdated: widget.onUpdated,
           ),
         ),
       ],
