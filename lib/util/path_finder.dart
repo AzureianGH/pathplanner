@@ -27,6 +27,8 @@ class PathFinderResult {
 
 class PathFinder {
   static const double _defaultNodeSizeMeters = 0.2;
+  static const double _keepVelocityTurnPenaltyScale = 2.4;
+  static const double _keepVelocityHeadingPenaltyScale = 1.6;
 
   static Future<PathFinderResult?> findPath({
     required PathPlannerPath sourcePath,
@@ -34,6 +36,7 @@ class PathFinder {
     required List<OptimizationBoundary> additionalObstacles,
     PathFinderAlgorithm algorithm = PathFinderAlgorithm.aStar,
     Size robotSize = const Size(0.9, 0.9),
+    bool keepVelocity = false,
   }) async {
     if (sourcePath.waypoints.length < 2) {
       return null;
@@ -57,6 +60,7 @@ class PathFinder {
       startPos: startPos,
       goalPos: goalPos,
       algorithm: algorithm,
+      keepVelocity: keepVelocity,
     );
     if (primaryResult != null) {
       return primaryResult;
@@ -75,6 +79,7 @@ class PathFinder {
       startPos: startPos,
       goalPos: goalPos,
       algorithm: algorithm,
+      keepVelocity: keepVelocity,
     );
   }
 
@@ -87,6 +92,7 @@ class PathFinder {
     required Translation2d startPos,
     required Translation2d goalPos,
     required PathFinderAlgorithm algorithm,
+    required bool keepVelocity,
   }) {
     final blocked = _buildBlockedGrid(
       navGrid,
@@ -113,6 +119,9 @@ class PathFinder {
       goalCell,
       blocked,
       algorithm,
+      keepVelocity: keepVelocity,
+      startHeading: keepVelocity ? sourcePath.waypoints.first.heading : null,
+      goalHeading: keepVelocity ? sourcePath.waypoints.last.heading : null,
     );
     if (solveResult == null || solveResult.pathCells.isEmpty) {
       return null;
@@ -124,21 +133,44 @@ class PathFinder {
     }
     rawPoints.add(goalPos);
 
-    final simplified = _simplifyPath(rawPoints, blocked, navGrid);
+    final simplified = _simplifyPath(
+      rawPoints,
+      blocked,
+      navGrid,
+      keepVelocity: keepVelocity,
+    );
     if (simplified.length < 2) {
       return null;
     }
 
-    final smoothed = _smoothPath(simplified, blocked, navGrid);
-    if (smoothed.length < 2) {
+    final smoothed = _smoothPath(
+      simplified,
+      blocked,
+      navGrid,
+      iterations: keepVelocity ? 6 : 2,
+    );
+    final reducedPoints = _reducePointCount(
+      smoothed,
+      keepVelocity: keepVelocity,
+    );
+    if (reducedPoints.length < 2) {
       return null;
     }
 
-    final waypoints = _waypointsFromPoints(
-      smoothed,
+    final guidedPoints = _minimizeBezierAnchors(
+      reducedPoints,
       sourcePath,
       navGrid,
       blocked,
+      keepVelocity: keepVelocity,
+    );
+
+    final waypoints = _waypointsFromPoints(
+      guidedPoints,
+      sourcePath,
+      navGrid,
+      blocked,
+      keepVelocity: keepVelocity,
     );
     if (waypoints.length < 2) {
       return null;
@@ -150,7 +182,7 @@ class PathFinder {
 
     return PathFinderResult(
       path: generatedPath,
-      distanceMeters: _pathDistance(smoothed),
+      distanceMeters: _pathDistance(guidedPoints),
       visitedNodes: solveResult.visitedNodes,
     );
   }
@@ -259,6 +291,11 @@ class PathFinder {
     _GridCell goal,
     List<List<bool>> blocked,
     PathFinderAlgorithm algorithm,
+    {
+    required bool keepVelocity,
+    Rotation2d? startHeading,
+    Rotation2d? goalHeading,
+  }
   ) {
     final rows = blocked.length;
     final cols = blocked[0].length;
@@ -310,8 +347,23 @@ class PathFinder {
           continue;
         }
 
-        final turnPenalty = _turnPenalty(parentCell, current, edge.cell);
-        final tentativeG = currentG + edge.cost + turnPenalty;
+        final turnPenalty = _turnPenalty(
+          parentCell,
+          current,
+          edge.cell,
+          keepVelocity: keepVelocity,
+        );
+        final headingPenalty = _headingPenalty(
+          parent: parentCell,
+          current: current,
+          neighbor: edge.cell,
+          start: start,
+          goal: goal,
+          startHeading: startHeading,
+          goalHeading: goalHeading,
+          keepVelocity: keepVelocity,
+        );
+        final tentativeG = currentG + edge.cost + turnPenalty + headingPenalty;
         final neighborG = gScore[neighborKey] ?? double.infinity;
         if (tentativeG >= neighborG) {
           continue;
@@ -404,6 +456,9 @@ class PathFinder {
     List<Translation2d> points,
     List<List<bool>> blocked,
     NavGrid navGrid,
+    {
+    required bool keepVelocity,
+  }
   ) {
     if (points.length <= 2) {
       return points;
@@ -413,11 +468,21 @@ class PathFinder {
     int anchorIdx = 0;
 
     while (anchorIdx < points.length - 1) {
-      int targetIdx = points.length - 1;
+      int targetIdx = keepVelocity
+          ? min(points.length - 1, anchorIdx + 5)
+          : points.length - 1;
       while (targetIdx > anchorIdx + 1 &&
           _isLineBlocked(
               points[anchorIdx], points[targetIdx], blocked, navGrid)) {
         targetIdx--;
+      }
+
+      if (keepVelocity) {
+        final maxJumpMeters = navGrid.nodeSizeMeters * 3.0;
+        while (targetIdx > anchorIdx + 1 &&
+            points[anchorIdx].getDistance(points[targetIdx]) > maxJumpMeters) {
+          targetIdx--;
+        }
       }
 
       simplified.add(points[targetIdx]);
@@ -431,6 +496,9 @@ class PathFinder {
     List<Translation2d> points,
     List<List<bool>> blocked,
     NavGrid navGrid,
+    {
+    required int iterations,
+  }
   ) {
     if (points.length < 3) {
       return points;
@@ -438,7 +506,7 @@ class PathFinder {
 
     var current = <Translation2d>[...points];
 
-    for (int iter = 0; iter < 2; iter++) {
+    for (int iter = 0; iter < iterations; iter++) {
       if (current.length < 3) {
         break;
       }
@@ -480,6 +548,46 @@ class PathFinder {
     return current;
   }
 
+  static List<Translation2d> _reducePointCount(
+    List<Translation2d> points, {
+    required bool keepVelocity,
+  }) {
+    if (points.length <= 2) {
+      return points;
+    }
+
+    final maxPoints = keepVelocity ? 28 : 20;
+    if (points.length <= maxPoints) {
+      return points;
+    }
+
+    final totalDistance = _pathDistance(points).toDouble();
+    if (totalDistance <= 1.0e-9) {
+      return [points.first, points.last];
+    }
+
+    final targetSpacing = totalDistance / (maxPoints - 1);
+    final reduced = <Translation2d>[points.first];
+    double accumulated = 0.0;
+    double nextSampleDistance = targetSpacing;
+
+    for (int i = 1; i < points.length; i++) {
+      final segmentDistance = points[i - 1].getDistance(points[i]).toDouble();
+      accumulated += segmentDistance;
+
+      if (accumulated + 1.0e-9 >= nextSampleDistance) {
+        reduced.add(points[i]);
+        nextSampleDistance += targetSpacing;
+      }
+    }
+
+    if (reduced.last != points.last) {
+      reduced.add(points.last);
+    }
+
+    return reduced;
+  }
+
   static bool _isLineBlocked(
     Translation2d start,
     Translation2d end,
@@ -514,26 +622,356 @@ class PathFinder {
     PathPlannerPath sourcePath,
     NavGrid navGrid,
     List<List<bool>> blocked,
+    {
+    required bool keepVelocity,
+  }
   ) {
     if (points.length < 2) {
       return [];
     }
 
-    const controlScales = [0.34, 0.26, 0.20, 0.14, 0.08, 0.05];
-    for (final scale in controlScales) {
-      final waypoints = _buildWaypointsWithScale(points, scale);
-      if (_isWaypointSetCollisionFree(
-          waypoints, sourcePath, navGrid, blocked)) {
-        return waypoints;
+    final collisionFreeWaypoints = _findCollisionFreeWaypoints(
+      points,
+      sourcePath,
+      navGrid,
+      blocked,
+      keepVelocity: keepVelocity,
+    );
+    if (collisionFreeWaypoints != null) {
+      return collisionFreeWaypoints;
+    }
+
+    final endpointHeadingHints = keepVelocity
+        ? _EndpointHeadingHints(
+            startHeading: sourcePath.waypoints.first.heading,
+            goalHeading: sourcePath.waypoints.last.heading,
+          )
+        : null;
+    return _buildWaypointsWithScale(
+      points,
+      controlScale: 0.05,
+      endpointScale: keepVelocity ? 0.28 : 1.0,
+      headingHints: endpointHeadingHints,
+    );
+  }
+
+  static List<Translation2d> _minimizeBezierAnchors(
+    List<Translation2d> points,
+    PathPlannerPath sourcePath,
+    NavGrid navGrid,
+    List<List<bool>> blocked,
+    {
+    required bool keepVelocity,
+  }
+  ) {
+    if (points.length <= 2) {
+      return points;
+    }
+
+    final maxDeviation = max(
+      navGrid.nodeSizeMeters * (keepVelocity ? 1.15 : 0.85),
+      0.18,
+    );
+    final anchors = [...points];
+
+    while (anchors.length > 2) {
+      int bestRemovalIndex = -1;
+      double bestDeviation = double.infinity;
+
+      for (int i = 1; i < anchors.length - 1; i++) {
+        final candidateAnchors = [...anchors]..removeAt(i);
+        final fit = _evaluateWaypointFit(
+          candidateAnchors,
+          points,
+          sourcePath,
+          navGrid,
+          blocked,
+          keepVelocity: keepVelocity,
+        );
+        if (fit == null || fit.maxDeviation > maxDeviation) {
+          continue;
+        }
+
+        if (fit.maxDeviation < bestDeviation) {
+          bestDeviation = fit.maxDeviation;
+          bestRemovalIndex = i;
+        }
+      }
+
+      if (bestRemovalIndex < 0) {
+        break;
+      }
+
+      anchors.removeAt(bestRemovalIndex);
+    }
+
+    return _regularizeBezierAnchors(
+      anchors,
+      points,
+      sourcePath,
+      navGrid,
+      blocked,
+      keepVelocity: keepVelocity,
+      maxDeviation: maxDeviation,
+    );
+  }
+
+  static List<Translation2d> _regularizeBezierAnchors(
+    List<Translation2d> anchors,
+    List<Translation2d> referencePoints,
+    PathPlannerPath sourcePath,
+    NavGrid navGrid,
+    List<List<bool>> blocked,
+    {
+    required bool keepVelocity,
+    required double maxDeviation,
+  }
+  ) {
+    if (anchors.length <= 3) {
+      return anchors;
+    }
+
+    final evenlySpaced = _resamplePointsByDistance(
+      referencePoints,
+      anchors.length,
+    );
+    final candidates = <List<Translation2d>>[
+      anchors,
+      evenlySpaced,
+      _blendAnchorLayouts(anchors, evenlySpaced, 0.25),
+      _blendAnchorLayouts(anchors, evenlySpaced, 0.5),
+      _blendAnchorLayouts(anchors, evenlySpaced, 0.75),
+    ];
+
+    List<Translation2d> bestAnchors = anchors;
+    double bestScore = double.infinity;
+
+    for (final candidate in candidates) {
+      final fit = _evaluateWaypointFit(
+        candidate,
+        referencePoints,
+        sourcePath,
+        navGrid,
+        blocked,
+        keepVelocity: keepVelocity,
+      );
+      if (fit == null || fit.maxDeviation > maxDeviation) {
+        continue;
+      }
+
+      final score = fit.maxDeviation +
+          (_anchorSpacingImbalance(candidate) * navGrid.nodeSizeMeters * 0.4);
+      if (score < bestScore) {
+        bestScore = score;
+        bestAnchors = candidate;
       }
     }
 
-    return _buildWaypointsWithScale(points, 0.05);
+    return bestAnchors;
+  }
+
+  static List<Translation2d> _resamplePointsByDistance(
+    List<Translation2d> points,
+    int targetCount,
+  ) {
+    if (points.length <= 2 || targetCount >= points.length) {
+      return [...points];
+    }
+    if (targetCount <= 2) {
+      return [points.first, points.last];
+    }
+
+    final totalDistance = _pathDistance(points).toDouble();
+    if (totalDistance <= 1.0e-9) {
+      return [points.first, points.last];
+    }
+
+    final targetSpacing = totalDistance / (targetCount - 1);
+    final resampled = <Translation2d>[points.first];
+    double traversed = 0.0;
+    double nextTarget = targetSpacing;
+
+    for (int i = 1; i < points.length && resampled.length < targetCount - 1; i++) {
+      final segmentStart = points[i - 1];
+      final segmentEnd = points[i];
+      final segmentDistance = segmentStart.getDistance(segmentEnd).toDouble();
+      if (segmentDistance <= 1.0e-9) {
+        continue;
+      }
+
+      while (traversed + segmentDistance >= nextTarget - 1.0e-9 &&
+          resampled.length < targetCount - 1) {
+        final t = (nextTarget - traversed) / segmentDistance;
+        resampled.add(Translation2d(
+          segmentStart.x + ((segmentEnd.x - segmentStart.x) * t),
+          segmentStart.y + ((segmentEnd.y - segmentStart.y) * t),
+        ));
+        nextTarget += targetSpacing;
+      }
+
+      traversed += segmentDistance;
+    }
+
+    if (resampled.length < targetCount) {
+      resampled.add(points.last);
+    }
+
+    return resampled;
+  }
+
+  static List<Translation2d> _blendAnchorLayouts(
+    List<Translation2d> original,
+    List<Translation2d> normalized,
+    double normalizedWeight,
+  ) {
+    if (original.length != normalized.length || original.length <= 2) {
+      return original;
+    }
+
+    final blended = <Translation2d>[original.first];
+    final originalWeight = 1.0 - normalizedWeight;
+    for (int i = 1; i < original.length - 1; i++) {
+      blended.add(Translation2d(
+        (original[i].x * originalWeight) + (normalized[i].x * normalizedWeight),
+        (original[i].y * originalWeight) + (normalized[i].y * normalizedWeight),
+      ));
+    }
+    blended.add(original.last);
+    return blended;
+  }
+
+  static double _anchorSpacingImbalance(List<Translation2d> anchors) {
+    if (anchors.length <= 2) {
+      return 0.0;
+    }
+
+    final segmentLengths = <double>[
+      for (int i = 1; i < anchors.length; i++)
+        anchors[i - 1].getDistance(anchors[i]).toDouble(),
+    ];
+    final averageLength =
+        segmentLengths.reduce((a, b) => a + b) / segmentLengths.length;
+    if (averageLength <= 1.0e-9) {
+      return 0.0;
+    }
+
+    final meanAbsoluteDeviation = segmentLengths
+            .map((length) => (length - averageLength).abs())
+            .reduce((a, b) => a + b) /
+        segmentLengths.length;
+    return meanAbsoluteDeviation / averageLength;
+  }
+
+  static _WaypointFit? _evaluateWaypointFit(
+    List<Translation2d> anchors,
+    List<Translation2d> referencePoints,
+    PathPlannerPath sourcePath,
+    NavGrid navGrid,
+    List<List<bool>> blocked,
+    {
+    required bool keepVelocity,
+  }
+  ) {
+    final waypoints = _findCollisionFreeWaypoints(
+      anchors,
+      sourcePath,
+      navGrid,
+      blocked,
+      keepVelocity: keepVelocity,
+    );
+    if (waypoints == null) {
+      return null;
+    }
+
+    final candidatePath = sourcePath.duplicate(sourcePath.name)
+      ..waypoints = PathPlannerPath.cloneWaypoints(waypoints);
+
+    try {
+      candidatePath.generatePathPoints();
+    } catch (_) {
+      return null;
+    }
+
+    return _WaypointFit(
+      waypoints: waypoints,
+      maxDeviation: _maxDistanceToPath(
+        referencePoints,
+        candidatePath.pathPositions,
+      ),
+    );
+  }
+
+  static List<Waypoint>? _findCollisionFreeWaypoints(
+    List<Translation2d> points,
+    PathPlannerPath sourcePath,
+    NavGrid navGrid,
+    List<List<bool>> blocked,
+    {
+    required bool keepVelocity,
+  }
+  ) {
+    if (points.length < 2) {
+      return null;
+    }
+
+    final endpointHeadingHints = keepVelocity
+        ? _EndpointHeadingHints(
+            startHeading: sourcePath.waypoints.first.heading,
+            goalHeading: sourcePath.waypoints.last.heading,
+          )
+        : null;
+    const controlScales = [0.34, 0.26, 0.20, 0.14, 0.08, 0.05];
+    final endpointScales = keepVelocity
+        ? const [1.8, 1.4, 1.1, 0.8, 0.55, 0.35]
+        : const [1.0];
+    for (final endpointScale in endpointScales) {
+      for (final scale in controlScales) {
+        final waypoints = _buildWaypointsWithScale(
+          points,
+          controlScale: scale,
+          endpointScale: endpointScale,
+          headingHints: endpointHeadingHints,
+        );
+        if (_isWaypointSetCollisionFree(
+            waypoints, sourcePath, navGrid, blocked)) {
+          return waypoints;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  static double _maxDistanceToPath(
+    List<Translation2d> referencePoints,
+    List<Translation2d> candidatePathPoints,
+  ) {
+    if (referencePoints.isEmpty || candidatePathPoints.isEmpty) {
+      return double.infinity;
+    }
+
+    double maxDeviation = 0.0;
+    for (final referencePoint in referencePoints) {
+      final minDistance = candidatePathPoints
+              .map((candidatePoint) =>
+                  referencePoint.getDistance(candidatePoint).toDouble())
+              .minOrNull ??
+          double.infinity;
+      if (minDistance > maxDeviation) {
+        maxDeviation = minDistance;
+      }
+    }
+
+    return maxDeviation;
   }
 
   static List<Waypoint> _buildWaypointsWithScale(
     List<Translation2d> points,
-    double controlScale,
+    {
+    required double controlScale,
+    required double endpointScale,
+    _EndpointHeadingHints? headingHints,
+  }
   ) {
     final waypoints = <Waypoint>[];
 
@@ -544,9 +982,43 @@ class PathFinder {
 
       Translation2d tangent;
       if (i == 0) {
-        tangent = points[1] - points[0];
+        tangent = _tangentFromHeading(
+              headingHints?.startHeading,
+              anchor.getDistance(points[1]),
+            ) ??
+            (points[1] - points[0]);
       } else if (i == points.length - 1) {
-        tangent = points[i] - points[i - 1];
+        tangent = _tangentFromHeading(
+              headingHints?.goalHeading,
+              points[i].getDistance(points[i - 1]),
+            ) ??
+            (points[i] - points[i - 1]);
+      } else if (headingHints != null && i == 1) {
+        tangent = _blendTranslationDirections(
+          _tangentFromHeading(
+                headingHints.startHeading,
+                max(
+                  anchor.getDistance(points[i - 1]),
+                  anchor.getDistance(points[i + 1]),
+                ),
+              ) ??
+              (points[i + 1] - points[i - 1]),
+          (points[i + 1] - points[i - 1]),
+          0.72,
+        );
+      } else if (headingHints != null && i == points.length - 2) {
+        tangent = _blendTranslationDirections(
+          _tangentFromHeading(
+                headingHints.goalHeading,
+                max(
+                  anchor.getDistance(points[i - 1]),
+                  anchor.getDistance(points[i + 1]),
+                ),
+              ) ??
+              (points[i + 1] - points[i - 1]),
+          (points[i + 1] - points[i - 1]),
+          0.72,
+        );
       } else {
         tangent = (points[i + 1] - points[i - 1]) / 2.0;
       }
@@ -558,13 +1030,25 @@ class PathFinder {
 
       if (i > 0) {
         final distToPrev = anchor.getDistance(points[i - 1]);
-        final backScale = max(0.05, distToPrev * controlScale);
+        final backScale = max(
+          0.05,
+          distToPrev *
+              controlScale *
+              ((i == points.length - 1 || i == points.length - 2)
+                  ? endpointScale
+                  : 1.0),
+        );
         prevControl = anchor - (tangentUnit * backScale);
       }
 
       if (i < points.length - 1) {
         final distToNext = anchor.getDistance(points[i + 1]);
-        final forwardScale = max(0.05, distToNext * controlScale);
+        final forwardScale = max(
+          0.05,
+          distToNext *
+              controlScale *
+              ((i == 0 || i == 1) ? endpointScale : 1.0),
+        );
         nextControl = anchor + (tangentUnit * forwardScale);
       }
 
@@ -637,6 +1121,9 @@ class PathFinder {
     _GridCell? parent,
     _GridCell current,
     _GridCell neighbor,
+    {
+    required bool keepVelocity,
+  }
   ) {
     if (parent == null) {
       return 0.0;
@@ -667,7 +1154,70 @@ class PathFinder {
       return 0.0;
     }
 
-    return 0.12 + (angle * 0.23);
+    final penalty = 0.12 + (angle * 0.23);
+    return keepVelocity ? penalty * _keepVelocityTurnPenaltyScale : penalty;
+  }
+
+  static double _headingPenalty({
+    required _GridCell? parent,
+    required _GridCell current,
+    required _GridCell neighbor,
+    required _GridCell start,
+    required _GridCell goal,
+    required Rotation2d? startHeading,
+    required Rotation2d? goalHeading,
+    required bool keepVelocity,
+  }) {
+    if (!keepVelocity) {
+      return 0.0;
+    }
+
+    final moveHeading = Rotation2d.fromComponents(
+      (neighbor.col - current.col).toDouble(),
+      (neighbor.row - current.row).toDouble(),
+    );
+
+    double penalty = 0.0;
+    if (parent == null && startHeading != null && current == start) {
+      penalty += _angleDifference(moveHeading, startHeading) *
+          _keepVelocityHeadingPenaltyScale;
+    }
+
+    if (goalHeading != null && neighbor == goal) {
+      penalty += _angleDifference(moveHeading, goalHeading) *
+          _keepVelocityHeadingPenaltyScale;
+    }
+
+    return penalty;
+  }
+
+  static double _angleDifference(Rotation2d a, Rotation2d b) {
+    final diff = (a - b).radians.abs().toDouble();
+    return min(diff, (2 * pi) - diff);
+  }
+
+  static Translation2d? _tangentFromHeading(
+    Rotation2d? heading,
+    num length,
+  ) {
+    if (heading == null || length <= 1.0e-9) {
+      return null;
+    }
+
+    return Translation2d.fromAngle(length, heading);
+  }
+
+  static Translation2d _blendTranslationDirections(
+    Translation2d preferred,
+    Translation2d fallback,
+    double preferredWeight,
+  ) {
+    return Translation2d(
+      (preferred.x * preferredWeight) +
+          (fallback.x * (1.0 - preferredWeight)),
+      (preferred.y * preferredWeight) +
+          (fallback.y * (1.0 - preferredWeight)),
+    );
   }
 
   static double _robotRadiusForSize(Size robotSize) {
@@ -675,6 +1225,26 @@ class PathFinder {
     final halfLength = robotSize.height * 0.5;
     return max(halfWidth, halfLength);
   }
+}
+
+class _EndpointHeadingHints {
+  final Rotation2d startHeading;
+  final Rotation2d goalHeading;
+
+  const _EndpointHeadingHints({
+    required this.startHeading,
+    required this.goalHeading,
+  });
+}
+
+class _WaypointFit {
+  final List<Waypoint> waypoints;
+  final double maxDeviation;
+
+  const _WaypointFit({
+    required this.waypoints,
+    required this.maxDeviation,
+  });
 }
 
 class _GridSolveResult {

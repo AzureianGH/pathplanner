@@ -36,6 +36,7 @@ class _PathFinderTreeState extends State<PathFinderTree> {
   PathFinderResult? _currentResult;
   bool _running = false;
   PathFinderAlgorithm _algorithm = PathFinderAlgorithm.aStar;
+  bool _keepVelocity = false;
 
   @override
   Widget build(BuildContext context) {
@@ -105,6 +106,25 @@ class _PathFinderTreeState extends State<PathFinderTree> {
           ),
         ),
         const SizedBox(height: 12),
+        CheckboxListTile(
+          contentPadding: EdgeInsets.zero,
+          controlAffinity: ListTileControlAffinity.leading,
+          title: const Text('Keep Velocity'),
+          subtitle: const Text(
+            'Bias the route to preserve motion direction and curve around obstacles when possible.',
+          ),
+          value: _keepVelocity,
+          onChanged: _running
+              ? null
+              : (value) {
+                  setState(() {
+                    _keepVelocity = value ?? false;
+                    _currentResult = null;
+                  });
+                  widget.onUpdate?.call(null);
+                },
+        ),
+        const SizedBox(height: 8),
         Row(
           children: [
             Expanded(
@@ -211,6 +231,7 @@ class _PathFinderTreeState extends State<PathFinderTree> {
         additionalObstacles: widget.alwaysFieldObjects,
         algorithm: _algorithm,
         robotSize: Size(robotWidth, robotLength),
+        keepVelocity: _keepVelocity,
       );
     } catch (_) {
       result = null;

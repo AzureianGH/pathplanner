@@ -101,4 +101,127 @@ void main() {
     expect(result, isNotNull);
     expect(result!.visitedNodes, greaterThan(0));
   });
+
+  test('keep velocity preserves endpoint heading hints', () async {
+    final fs = MemoryFileSystem();
+    fs.directory('/project').createSync(recursive: true);
+    fs.directory('/project/paths').createSync(recursive: true);
+
+    final navGrid = NavGrid.blankGrid(
+      nodeSizeMeters: 0.5,
+      fieldSize: const Size(6.0, 6.0),
+    );
+    fs
+        .file('/project/navgrid.json')
+        .writeAsStringSync(jsonEncode(navGrid.toJson()));
+
+    final sourcePath = PathPlannerPath(
+      name: 'testPath',
+      waypoints: [
+        Waypoint(
+          anchor: const Translation2d(1.0, 1.0),
+          nextControl: const Translation2d(1.0, 2.0),
+        ),
+        Waypoint(
+          prevControl: const Translation2d(4.0, 5.0),
+          anchor: const Translation2d(5.0, 5.0),
+        ),
+      ],
+      globalConstraints: PathConstraints(),
+      goalEndState: GoalEndState(0.0, const Rotation2d()),
+      constraintZones: [],
+      pointTowardsZones: [],
+      rotationTargets: [],
+      eventMarkers: [],
+      pathDir: '/project/paths',
+      fs: fs,
+      reversed: false,
+      folder: null,
+      idealStartingState: IdealStartingState(0.0, const Rotation2d()),
+      useDefaultConstraints: true,
+    );
+
+    final noKeepVelocity = await PathFinder.findPath(
+      sourcePath: sourcePath,
+      fieldSizeMeters: const Size(6.0, 6.0),
+      additionalObstacles: const [],
+      keepVelocity: false,
+    );
+    final keepVelocity = await PathFinder.findPath(
+      sourcePath: sourcePath,
+      fieldSizeMeters: const Size(6.0, 6.0),
+      additionalObstacles: const [],
+      keepVelocity: true,
+    );
+
+    expect(noKeepVelocity, isNotNull);
+    expect(keepVelocity, isNotNull);
+
+    final keepStartHeading = keepVelocity!.path.waypoints.first.heading;
+    final keepEndHeading = keepVelocity.path.waypoints.last.heading;
+    final noKeepStartHeading = noKeepVelocity!.path.waypoints.first.heading;
+
+    expect((keepStartHeading.degrees - 90).abs(), lessThan(15));
+    expect((keepEndHeading.degrees - 0).abs(), lessThan(15));
+    expect((noKeepStartHeading.degrees - 90).abs(), greaterThan(20));
+  });
+
+  test('keep velocity minimizes bezier waypoint anchors', () async {
+    final fs = MemoryFileSystem();
+    fs.directory('/project').createSync(recursive: true);
+    fs.directory('/project/paths').createSync(recursive: true);
+
+    final navGrid = NavGrid.blankGrid(
+      nodeSizeMeters: 0.2,
+      fieldSize: const Size(16.0, 8.0),
+    );
+    fs
+        .file('/project/navgrid.json')
+        .writeAsStringSync(jsonEncode(navGrid.toJson()));
+
+    final sourcePath = PathPlannerPath(
+      name: 'testPath',
+      waypoints: [
+        Waypoint(
+          anchor: const Translation2d(2.0, 7.0),
+          nextControl: const Translation2d(2.0, 6.0),
+        ),
+        Waypoint(
+          prevControl: const Translation2d(12.0, 1.0),
+          anchor: const Translation2d(14.0, 1.0),
+        ),
+      ],
+      globalConstraints: PathConstraints(),
+      goalEndState: GoalEndState(0.0, const Rotation2d()),
+      constraintZones: [],
+      pointTowardsZones: [],
+      rotationTargets: [],
+      eventMarkers: [],
+      pathDir: '/project/paths',
+      fs: fs,
+      reversed: false,
+      folder: null,
+      idealStartingState: IdealStartingState(4.0, Rotation2d.fromDegrees(-90)),
+      useDefaultConstraints: true,
+    );
+
+    final result = await PathFinder.findPath(
+      sourcePath: sourcePath,
+      fieldSizeMeters: const Size(16.0, 8.0),
+      additionalObstacles: const [],
+      keepVelocity: true,
+    );
+
+    expect(result, isNotNull);
+    expect(result!.path.waypoints.length, lessThanOrEqualTo(10));
+
+    final segmentLengths = [
+      for (int i = 1; i < result.path.waypoints.length; i++)
+        result.path.waypoints[i - 1]
+            .anchor
+            .getDistance(result.path.waypoints[i].anchor)
+            .toDouble(),
+    ];
+    expect(segmentLengths.every((length) => length >= 0.25), isTrue);
+  });
 }
